@@ -87,3 +87,28 @@ def test_discover_markdown_files_excludes_match_project_relative_paths_only(tmp_
 
     assert result.included == ("index.md",)
     assert result.excluded_count == 0
+
+
+def test_discover_markdown_files_preserves_precise_include_glob_shape(tmp_path):
+    (tmp_path / "README.md").write_text("# Home\n", encoding="utf-8")
+    (tmp_path / "README.MD").write_text("# Home\n", encoding="utf-8")
+    (tmp_path / "README.extra.md").write_text("# Extra\n", encoding="utf-8")
+
+    result = discover_markdown_files(tmp_path, include=("README.md",), exclude=())
+
+    assert result.included == ("README.MD", "README.md")
+
+
+def test_discover_markdown_files_preserves_precise_exclude_glob_shape(tmp_path):
+    (tmp_path / "README.md").write_text("# Home\n", encoding="utf-8")
+    (tmp_path / "README.MD").write_text("# Home\n", encoding="utf-8")
+    (tmp_path / "README.extra.md").write_text("# Extra\n", encoding="utf-8")
+
+    result = discover_markdown_files(
+        tmp_path,
+        include=("**/*.md",),
+        exclude=("README.md",),
+    )
+
+    assert result.included == ("README.extra.md",)
+    assert result.excluded_count == 2

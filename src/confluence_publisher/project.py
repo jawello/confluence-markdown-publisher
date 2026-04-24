@@ -22,7 +22,7 @@ def _validate_patterns(patterns: tuple[str, ...]) -> None:
 
 def _markdown_glob_pattern(pattern: str) -> str:
     if pattern.lower().endswith(".md"):
-        return f"{pattern[:-2]}*"
+        return f"{pattern[:-3]}.[mM][dD]"
     return pattern
 
 
