@@ -143,3 +143,54 @@ pages:
 
     with pytest.raises(ManifestError, match="output_format"):
         load_manifest(manifest_path)
+
+
+@pytest.mark.parametrize("page_path", ["..", "../outside.md", "docs/..", "docs/../index.md"])
+def test_load_manifest_rejects_parent_directory_page_paths(tmp_path, page_path):
+    manifest_path = tmp_path / ".confluence-publish.yml"
+    manifest_path.write_text(
+        f"""
+pages:
+  {page_path}:
+    page_id: "111111"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ManifestError, match="Invalid page path"):
+        load_manifest(manifest_path)
+
+
+def test_load_manifest_rejects_non_string_output_format(tmp_path):
+    manifest_path = tmp_path / ".confluence-publish.yml"
+    manifest_path.write_text(
+        """
+defaults:
+  output_format:
+    - svg
+pages:
+  index.md:
+    page_id: "111111"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ManifestError, match="output_format"):
+        load_manifest(manifest_path)
+
+
+def test_load_manifest_rejects_boolean_diagram_width(tmp_path):
+    manifest_path = tmp_path / ".confluence-publish.yml"
+    manifest_path.write_text(
+        """
+defaults:
+  diagram_width: true
+pages:
+  index.md:
+    page_id: "111111"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ManifestError, match="diagram_width"):
+        load_manifest(manifest_path)

@@ -53,7 +53,7 @@ def _as_string_list(value: Any, field_name: str, default: tuple[str, ...]) -> tu
 
 def _normalize_page_path(value: str) -> str:
     normalized = PurePosixPath(value.replace("\\", "/")).as_posix().lstrip("/")
-    if normalized in ("", ".") or normalized.startswith("../") or "/../" in normalized:
+    if normalized in ("", ".") or ".." in PurePosixPath(normalized).parts:
         raise ManifestError(f"Invalid page path: {value}")
     return normalized
 
@@ -69,7 +69,7 @@ def _optional_str(value: Any, field_name: str) -> str | None:
 def _positive_int(value: Any, field_name: str, default: int) -> int:
     if value is None:
         return default
-    if not isinstance(value, int) or value <= 0:
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise ManifestError(f"{field_name} must be a positive integer")
     return value
 
@@ -90,7 +90,7 @@ def load_manifest(path: Path) -> ProjectManifest:
     pages_raw = _as_mapping(root.get("pages"), "pages")
 
     output_format = defaults.get("output_format", "svg")
-    if output_format not in SUPPORTED_OUTPUT_FORMATS:
+    if not isinstance(output_format, str) or output_format not in SUPPORTED_OUTPUT_FORMATS:
         raise ManifestError("defaults.output_format must be one of: png, svg")
 
     version_comment = defaults.get("version_comment", DEFAULT_VERSION_COMMENT)
