@@ -58,3 +58,32 @@ def test_discover_markdown_files_rejects_parent_traversal_patterns(tmp_path):
 
     with pytest.raises(ValueError, match="parent traversal"):
         discover_markdown_files(tmp_path, include=("../*.md",), exclude=())
+
+
+def test_discover_markdown_files_excludes_with_project_glob_semantics(tmp_path):
+    (tmp_path / "guide").mkdir()
+    (tmp_path / "guide" / "index.md").write_text("# Guide\n", encoding="utf-8")
+
+    result = discover_markdown_files(
+        tmp_path,
+        include=("**/*.md",),
+        exclude=("guide/**/*.md",),
+    )
+
+    assert result.included == ()
+    assert result.excluded_count == 1
+
+
+def test_discover_markdown_files_excludes_match_project_relative_paths_only(tmp_path):
+    project_root = tmp_path / "ancestor-name" / "project"
+    project_root.mkdir(parents=True)
+    (project_root / "index.md").write_text("# Home\n", encoding="utf-8")
+
+    result = discover_markdown_files(
+        project_root,
+        include=("**/*.md",),
+        exclude=("ancestor-name/**/*.md",),
+    )
+
+    assert result.included == ("index.md",)
+    assert result.excluded_count == 0

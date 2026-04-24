@@ -14,11 +14,6 @@ def _relative_posix(root: Path, path: Path) -> str:
     return path.relative_to(root).as_posix()
 
 
-def _matches_any(root: Path, relative_path: str, patterns: tuple[str, ...]) -> bool:
-    path = root / relative_path
-    return any(path.match(pattern) or Path(relative_path).match(pattern) for pattern in patterns)
-
-
 def _validate_patterns(patterns: tuple[str, ...]) -> None:
     for pattern in patterns:
         if ".." in pattern.replace("\\", "/").split("/"):
@@ -29,6 +24,15 @@ def _markdown_glob_pattern(pattern: str) -> str:
     if pattern.lower().endswith(".md"):
         return f"{pattern[:-2]}*"
     return pattern
+
+
+def _discover_paths(project_root: Path, patterns: tuple[str, ...]) -> set[str]:
+    discovered: set[str] = set()
+    for pattern in patterns:
+        for path in project_root.glob(_markdown_glob_pattern(pattern)):
+            if path.is_file() and path.suffix.lower() == ".md":
+                discovered.add(_relative_posix(project_root, path))
+    return discovered
 
 
 def discover_markdown_files(
@@ -45,16 +49,13 @@ def discover_markdown_files(
     _validate_patterns(include)
     _validate_patterns(exclude)
 
-    discovered: set[str] = set()
-    for pattern in include:
-        for path in project_root.glob(_markdown_glob_pattern(pattern)):
-            if path.is_file() and path.suffix.lower() == ".md":
-                discovered.add(_relative_posix(project_root, path))
+    discovered = _discover_paths(project_root, include)
+    excluded = _discover_paths(project_root, exclude)
 
     included: list[str] = []
     excluded_count = 0
     for relative_path in sorted(discovered):
-        if _matches_any(project_root, relative_path, exclude):
+        if relative_path in excluded:
             excluded_count += 1
             continue
         included.append(relative_path)
