@@ -90,10 +90,9 @@ def _as_string_list(value: Any, field_name: str, default: tuple[str, ...]) -> tu
 
 def _normalize_page_path(value: str) -> str:
     if (
-        len(value) >= 3
+        len(value) >= 2
         and value[0].isalpha()
         and value[1] == ":"
-        and value[2] in ("\\", "/")
     ):
         raise ManifestError(f"Invalid page path: {value}")
     normalized = PurePosixPath(value.replace("\\", "/")).as_posix()

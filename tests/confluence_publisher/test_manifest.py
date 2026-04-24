@@ -245,12 +245,21 @@ pages:
         load_manifest(manifest_path)
 
 
-def test_load_manifest_rejects_windows_drive_page_path(tmp_path):
+@pytest.mark.parametrize(
+    "page_path",
+    [
+        "C:/docs/index.md",
+        r"C:\docs\index.md",
+        "C:docs/index.md",
+        r"C:docs\index.md",
+    ],
+)
+def test_load_manifest_rejects_windows_drive_page_path(tmp_path, page_path):
     manifest_path = tmp_path / ".confluence-publish.yml"
     manifest_path.write_text(
-        """
+        f"""
 pages:
-  'C:\\docs\\index.md':
+  '{page_path}':
     page_id: "111111"
 """.strip(),
         encoding="utf-8",
