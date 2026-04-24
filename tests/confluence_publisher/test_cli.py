@@ -83,7 +83,13 @@ class FakeClient:
     async def upload_attachment(self, page_id: str, file_path: Path) -> None:
         self.calls.append(("upload_attachment", page_id, file_path.name, file_path.exists()))
 
-    async def update_page_storage(self, page_id: str, title: str, storage: str) -> None:
+    async def update_page_storage(
+        self,
+        page_id: str,
+        title: str,
+        storage: str,
+        version_comment: str = "Rendered Mermaid diagrams from Markdown source",
+    ) -> None:
         self.calls.append(
             (
                 "update_page_storage",
@@ -92,6 +98,7 @@ class FakeClient:
                 "<ac:image" in storage,
                 'ac:width="1000"' in storage,
                 'ac:width="1200"' in storage,
+                version_comment,
             )
         )
 
@@ -102,6 +109,30 @@ def fake_connect_for(client: FakeClient):
         yield client
 
     return fake_connect
+
+
+@pytest.mark.asyncio
+async def test_publish_single_page_uses_supplied_version_comment(tmp_path, monkeypatch):
+    source = tmp_path / "overview.md"
+    source.write_text("# Overview\n\nPlain text.\n", encoding="utf-8")
+    client = FakeClient()
+
+    await cli.publish_single_page(
+        page_id="5151854234",
+        title="Test",
+        source=source,
+        output_format="svg",
+        diagram_width=1000,
+        mmdc_bin="mmdc",
+        allow_diagram_fallback=False,
+        dry_run=False,
+        client=client,
+        version_comment="Sync docs",
+    )
+
+    assert client.calls == [
+        ("update_page_storage", "5151854234", "Test", False, False, False, "Sync docs")
+    ]
 
 
 @pytest.mark.asyncio
@@ -147,7 +178,15 @@ async def test_run_async_live_uploads_attachments_before_storage_update(tmp_path
     assert result == 0
     assert client.calls[0][:2] == ("upload_attachment", "5151854234")
     assert client.calls[0][3] is True
-    assert client.calls[1] == ("update_page_storage", "5151854234", "Test", True, True, False)
+    assert client.calls[1] == (
+        "update_page_storage",
+        "5151854234",
+        "Test",
+        True,
+        True,
+        False,
+        "Rendered Mermaid diagrams from Markdown source",
+    )
 
 
 @pytest.mark.asyncio
@@ -167,7 +206,15 @@ async def test_run_async_uses_mermaid_width_directive_over_cli_default(tmp_path,
     )
 
     assert result == 0
-    assert client.calls[1] == ("update_page_storage", "5151854234", "Test", True, False, True)
+    assert client.calls[1] == (
+        "update_page_storage",
+        "5151854234",
+        "Test",
+        True,
+        False,
+        True,
+        "Rendered Mermaid diagrams from Markdown source",
+    )
 
 
 class FailingRenderer:

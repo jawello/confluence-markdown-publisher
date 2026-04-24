@@ -135,7 +135,13 @@ class McpAtlassianClient:
         )
         _structured_content(result)
 
-    async def update_page_storage(self, page_id: str, title: str, storage: str) -> None:
+    async def update_page_storage(
+        self,
+        page_id: str,
+        title: str,
+        storage: str,
+        version_comment: str = "Rendered Mermaid diagrams from Markdown source",
+    ) -> None:
         result = await self.session.call_tool(
             "confluence_update_page",
             {
@@ -144,7 +150,7 @@ class McpAtlassianClient:
                 "content": storage,
                 "content_format": "storage",
                 "is_minor_edit": True,
-                "version_comment": "Rendered Mermaid diagrams from Markdown source",
+                "version_comment": version_comment,
             },
         )
         _structured_content(result)

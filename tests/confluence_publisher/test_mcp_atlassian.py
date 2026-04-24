@@ -162,6 +162,33 @@ async def test_client_updates_page_as_storage():
 
 
 @pytest.mark.asyncio
+async def test_client_updates_page_with_custom_version_comment():
+    session = FakeMcpSession()
+    client = McpAtlassianClient(session)
+
+    await client.update_page_storage(
+        "5151854234",
+        "Test",
+        "<p>hello</p>",
+        version_comment="Sync docs",
+    )
+
+    assert session.calls == [
+        (
+            "confluence_update_page",
+            {
+                "page_id": "5151854234",
+                "title": "Test",
+                "content": "<p>hello</p>",
+                "content_format": "storage",
+                "is_minor_edit": True,
+                "version_comment": "Sync docs",
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
 async def test_client_update_page_storage_rejects_mcp_error():
     result = CallToolResult(content=[TextContent(type="text", text="update failed")], isError=True)
     session = FakeMcpSession(update_result=result)
