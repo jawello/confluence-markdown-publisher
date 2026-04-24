@@ -226,3 +226,35 @@ pages:
 
     with pytest.raises(ManifestError, match="Duplicate page path.*docs/index.md"):
         load_manifest(manifest_path)
+
+
+def test_load_manifest_rejects_duplicate_yaml_page_keys(tmp_path):
+    manifest_path = tmp_path / ".confluence-publish.yml"
+    manifest_path.write_text(
+        """
+pages:
+  index.md:
+    page_id: "111111"
+  index.md:
+    page_id: "222222"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ManifestError, match=r"[Dd]uplicate (mapping )?key"):
+        load_manifest(manifest_path)
+
+
+def test_load_manifest_rejects_windows_drive_page_path(tmp_path):
+    manifest_path = tmp_path / ".confluence-publish.yml"
+    manifest_path.write_text(
+        """
+pages:
+  'C:\\docs\\index.md':
+    page_id: "111111"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ManifestError, match="Invalid page path"):
+        load_manifest(manifest_path)

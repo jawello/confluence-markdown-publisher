@@ -16,6 +16,43 @@ class ManifestError(ValueError):
     pass
 
 
+class _UniqueKeySafeLoader(yaml.SafeLoader):
+    pass
+
+
+def _construct_unique_mapping(
+    loader: _UniqueKeySafeLoader, node: Any, deep: bool = False
+) -> dict[Any, Any]:
+    loader.flatten_mapping(node)
+    mapping: dict[Any, Any] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        try:
+            duplicate = key in mapping
+        except TypeError as exc:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                "found unhashable key",
+                key_node.start_mark,
+            ) from exc
+        if duplicate:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                f"found duplicate mapping key {key!r}",
+                key_node.start_mark,
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_UniqueKeySafeLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    _construct_unique_mapping,
+)
+
+
 @dataclass(frozen=True)
 class ManifestPage:
     path: str
@@ -52,6 +89,13 @@ def _as_string_list(value: Any, field_name: str, default: tuple[str, ...]) -> tu
 
 
 def _normalize_page_path(value: str) -> str:
+    if (
+        len(value) >= 3
+        and value[0].isalpha()
+        and value[1] == ":"
+        and value[2] in ("\\", "/")
+    ):
+        raise ManifestError(f"Invalid page path: {value}")
     normalized = PurePosixPath(value.replace("\\", "/")).as_posix()
     if PurePosixPath(normalized).is_absolute():
         raise ManifestError(f"Invalid page path: {value}")
@@ -81,7 +125,7 @@ def load_manifest(path: Path) -> ProjectManifest:
         raise ManifestError(f"Manifest not found: {path}")
 
     try:
-        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        raw = yaml.load(path.read_text(encoding="utf-8"), Loader=_UniqueKeySafeLoader)
     except yaml.YAMLError as exc:
         raise ManifestError(f"Invalid YAML in manifest {path}: {exc}") from exc
 
