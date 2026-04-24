@@ -34,6 +34,37 @@ def test_arg_parser_rejects_non_positive_diagram_width():
         )
 
 
+def test_arg_parser_accepts_project_mode():
+    args = build_arg_parser().parse_args(["--project", "docs", "--plan-only"])
+
+    assert args.project == Path("docs")
+    assert args.plan_only is True
+    assert args.manifest is None
+
+
+def test_validate_args_rejects_source_and_project_together():
+    args = build_arg_parser().parse_args(
+        ["--source", "page.md", "--page-id", "111111", "--project", "docs"]
+    )
+
+    with pytest.raises(SystemExit):
+        cli.validate_args(args)
+
+
+def test_validate_args_requires_page_id_for_single_page():
+    args = build_arg_parser().parse_args(["--source", "page.md"])
+
+    with pytest.raises(SystemExit):
+        cli.validate_args(args)
+
+
+def test_validate_args_rejects_page_id_in_project_mode():
+    args = build_arg_parser().parse_args(["--project", "docs", "--page-id", "111111"])
+
+    with pytest.raises(SystemExit):
+        cli.validate_args(args)
+
+
 def test_preview_lists_page_source_and_attachments():
     preview = build_preview(
         page_id="5151854234",
@@ -109,6 +140,85 @@ def fake_connect_for(client: FakeClient):
         yield client
 
     return fake_connect
+
+
+@pytest.mark.asyncio
+async def test_run_async_project_plan_only_does_not_connect_to_mcp(tmp_path, monkeypatch, capsys):
+    (tmp_path / "index.md").write_text("# Home\n", encoding="utf-8")
+    (tmp_path / ".confluence-publish.yml").write_text(
+        """
+pages:
+  index.md:
+    page_id: "111111"
+    title: "Home"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    def fail_connect():
+        raise AssertionError("plan-only must not connect to MCP")
+
+    monkeypatch.setattr(cli, "connect_mcp_atlassian", fail_connect)
+
+    result = await cli.run_async(["--project", str(tmp_path), "--plan-only"])
+
+    assert result == 0
+    output = capsys.readouterr().out
+    assert "Confluence project publish plan" in output
+    assert "index.md -> 111111" in output
+
+
+@pytest.mark.asyncio
+async def test_run_async_project_missing_manifest_entry_exits_before_mcp(
+    tmp_path,
+    monkeypatch,
+):
+    (tmp_path / "index.md").write_text("# Home\n", encoding="utf-8")
+    (tmp_path / "guide.md").write_text("# Guide\n", encoding="utf-8")
+    (tmp_path / ".confluence-publish.yml").write_text(
+        """
+pages:
+  index.md:
+    page_id: "111111"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    def fail_connect():
+        raise AssertionError("planning error must not connect to MCP")
+
+    monkeypatch.setattr(cli, "connect_mcp_atlassian", fail_connect)
+
+    with pytest.raises(SystemExit, match="guide.md"):
+        await cli.run_async(["--project", str(tmp_path), "--plan-only"])
+
+
+@pytest.mark.asyncio
+async def test_run_async_project_live_updates_with_comment(tmp_path, monkeypatch):
+    (tmp_path / "index.md").write_text("# Home\n", encoding="utf-8")
+    (tmp_path / ".confluence-publish.yml").write_text(
+        """
+defaults:
+  version_comment: "Manifest comment"
+pages:
+  index.md:
+    page_id: "111111"
+    title: "Home"
+""".strip(),
+        encoding="utf-8",
+    )
+    client = FakeClient()
+
+    monkeypatch.setattr(cli, "connect_mcp_atlassian", fake_connect_for(client))
+
+    result = await cli.run_async(
+        ["--project", str(tmp_path), "--comment", "CLI comment", "--yes"]
+    )
+
+    assert result == 0
+    assert client.calls == [
+        ("update_page_storage", "111111", "Home", False, False, False, "CLI comment")
+    ]
 
 
 @pytest.mark.asyncio

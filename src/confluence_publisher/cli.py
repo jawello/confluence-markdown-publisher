@@ -10,8 +10,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .converter import collect_mermaid_blocks, convert_markdown_to_storage
+from .manifest import ManifestError, load_manifest
 from .mcp_atlassian import connect_mcp_atlassian
 from .models import RenderedDiagram
+from .planner import PlannerError, build_publish_plan
+from .project import discover_markdown_files
 from .renderer import MermaidRenderer, RenderError
 from .storage import diagram_fragment, fallback_mermaid_fragment
 
@@ -37,9 +40,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         prog="publish-confluence",
         description="Publish Markdown to Confluence storage format with rendered Mermaid diagrams.",
     )
-    parser.add_argument("--source", type=Path, required=True)
-    parser.add_argument("--page-id", required=True)
+    parser.add_argument("--source", type=Path)
+    parser.add_argument("--page-id")
     parser.add_argument("--title")
+    parser.add_argument("--project", type=Path)
+    parser.add_argument("--manifest", type=Path)
+    parser.add_argument("--plan-only", action="store_true")
+    parser.add_argument("--comment")
     parser.add_argument("--output-format", choices=("svg", "png"), default="svg")
     parser.add_argument("--diagram-width", type=_positive_int, default=1000)
     parser.add_argument("--mmdc-bin", default="mmdc")
@@ -47,6 +54,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--yes", action="store_true")
     parser.add_argument("--allow-diagram-fallback", action="store_true")
     return parser
+
+
+def validate_args(args: argparse.Namespace) -> None:
+    if args.source is not None and args.project is not None:
+        raise SystemExit("--source and --project are mutually exclusive")
+    if args.source is None and args.project is None:
+        raise SystemExit("Either --source or --project is required")
+    if args.source is not None:
+        if not args.page_id:
+            raise SystemExit("--page-id is required with --source")
+        if args.plan_only:
+            raise SystemExit("--plan-only is only supported with --project")
+    if args.project is not None:
+        if args.page_id:
+            raise SystemExit("--page-id is not supported with --project")
+        if args.title:
+            raise SystemExit("--title is not supported with --project")
 
 
 def build_preview(
@@ -164,8 +188,71 @@ async def publish_single_page(
         return prepared.storage
 
 
+async def run_project_mode(args: argparse.Namespace) -> int:
+    from .batch import format_publish_plan, publish_project
+
+    manifest_path = args.manifest or args.project / ".confluence-publish.yml"
+    try:
+        manifest = load_manifest(manifest_path)
+        discovery = discover_markdown_files(
+            args.project,
+            include=manifest.include,
+            exclude=manifest.exclude,
+        )
+        plan = build_publish_plan(
+            project_root=args.project,
+            manifest=manifest,
+            discovered_paths=discovery.included,
+            excluded_count=discovery.excluded_count,
+            version_comment=args.comment,
+            output_format=args.output_format,
+            diagram_width=args.diagram_width,
+            allow_diagram_fallback=True if args.allow_diagram_fallback else None,
+        )
+    except (ManifestError, PlannerError, OSError) as exc:
+        raise SystemExit(str(exc)) from exc
+
+    print(format_publish_plan(plan))
+
+    if args.plan_only:
+        return 0
+
+    if args.dry_run:
+        class DryRunClient:
+            async def upload_attachment(self, page_id, file_path):
+                raise AssertionError("dry-run must not upload attachments")
+
+            async def update_page_storage(self, page_id, title, storage, version_comment):
+                raise AssertionError("dry-run must not update pages")
+
+        return await publish_project(
+            plan,
+            client=DryRunClient(),
+            dry_run=True,
+            mmdc_bin=args.mmdc_bin,
+        )
+
+    if not args.yes:
+        answer = input("Publish project to Confluence? Type 'yes' to continue: ")
+        if answer != "yes":
+            print("Aborted.")
+            return 1
+
+    async with connect_mcp_atlassian() as client:
+        return await publish_project(
+            plan,
+            client=client,
+            dry_run=False,
+            mmdc_bin=args.mmdc_bin,
+        )
+
+
 async def run_async(argv: Sequence[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
+    validate_args(args)
+    if args.project is not None:
+        return await run_project_mode(args)
+
     with _prepare_single_page(
         source=args.source,
         output_format=args.output_format,

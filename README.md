@@ -61,6 +61,48 @@ uv run publish-confluence \
   --yes
 ```
 
+## Project Mode
+
+Publish a documentation folder with a manifest:
+
+```bash
+uv run publish-confluence \
+  --project docs \
+  --plan-only
+```
+
+The default manifest is `docs/.confluence-publish.yml`:
+
+```yaml
+space: "~6393203da593cb822e995262"
+
+include:
+  - "**/*.md"
+
+exclude:
+  - "**/drafts/**"
+
+defaults:
+  version_comment: "Sync documentation from Markdown"
+
+pages:
+  index.md:
+    page_id: "111111"
+    title: "Project Documentation"
+    url: "https://criteo.atlassian.net/wiki/pages/111111/Project+Documentation"
+```
+
+Project mode never creates Confluence pages. Every discovered Markdown file must have a `page_id` in the manifest.
+
+Publish with a version comment:
+
+```bash
+uv run publish-confluence \
+  --project docs \
+  --comment "Sync guide updates" \
+  --yes
+```
+
 ## Diagram Size
 
 Set the default rendered image width for all diagrams:
