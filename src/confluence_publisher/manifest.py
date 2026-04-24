@@ -52,7 +52,9 @@ def _as_string_list(value: Any, field_name: str, default: tuple[str, ...]) -> tu
 
 
 def _normalize_page_path(value: str) -> str:
-    normalized = PurePosixPath(value.replace("\\", "/")).as_posix().lstrip("/")
+    normalized = PurePosixPath(value.replace("\\", "/")).as_posix()
+    if PurePosixPath(normalized).is_absolute():
+        raise ManifestError(f"Invalid page path: {value}")
     if normalized in ("", ".") or ".." in PurePosixPath(normalized).parts:
         raise ManifestError(f"Invalid page path: {value}")
     return normalized
@@ -107,6 +109,8 @@ def load_manifest(path: Path) -> ProjectManifest:
         if not isinstance(raw_page_path, str):
             raise ManifestError("pages keys must be strings")
         page_path = _normalize_page_path(raw_page_path)
+        if page_path in pages:
+            raise ManifestError(f"Duplicate page path {page_path}")
         page_data = _as_mapping(raw_page, f"pages.{page_path}")
         page_id = page_data.get("page_id")
         if not isinstance(page_id, str) or not page_id:
