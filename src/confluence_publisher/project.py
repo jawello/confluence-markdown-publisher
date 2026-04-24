@@ -16,7 +16,12 @@ def _relative_posix(root: Path, path: Path) -> str:
 
 def _validate_patterns(patterns: tuple[str, ...]) -> None:
     for pattern in patterns:
-        if ".." in pattern.replace("\\", "/").split("/"):
+        normalized = pattern.replace("\\", "/")
+        if normalized.startswith("/") or (
+            len(normalized) >= 2 and normalized[0].isalpha() and normalized[1] == ":"
+        ):
+            raise ValueError(f"Pattern must be project-relative, not absolute: {pattern}")
+        if ".." in normalized.split("/"):
             raise ValueError(f"Pattern contains parent traversal: {pattern}")
 
 

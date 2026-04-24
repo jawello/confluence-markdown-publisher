@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 import yaml
 
@@ -119,6 +120,11 @@ def _positive_int(value: Any, field_name: str, default: int) -> int:
     return value
 
 
+def _url_contains_page_id_segment(url: str, page_id: str) -> bool:
+    path_segments = urlparse(url).path.split("/")
+    return any(unquote(segment) == page_id for segment in path_segments)
+
+
 def load_manifest(path: Path) -> ProjectManifest:
     if not path.exists():
         raise ManifestError(f"Manifest not found: {path}")
@@ -166,7 +172,7 @@ def load_manifest(path: Path) -> ProjectManifest:
 
         title = _optional_str(page_data.get("title"), f"pages.{page_path}.title")
         url = _optional_str(page_data.get("url"), f"pages.{page_path}.url")
-        if url is not None and page_id not in url:
+        if url is not None and not _url_contains_page_id_segment(url, page_id):
             raise ManifestError(f"pages.{page_path}.url must contain page_id {page_id}")
 
         pages[page_path] = ManifestPage(path=page_path, page_id=page_id, title=title, url=url)

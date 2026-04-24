@@ -217,11 +217,14 @@ async def run_project_mode(args: argparse.Namespace) -> int:
     manifest_path = args.manifest or args.project / ".confluence-publish.yml"
     try:
         manifest = load_manifest(manifest_path)
-        discovery = discover_markdown_files(
-            args.project,
-            include=manifest.include,
-            exclude=manifest.exclude,
-        )
+        try:
+            discovery = discover_markdown_files(
+                args.project,
+                include=manifest.include,
+                exclude=manifest.exclude,
+            )
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
         plan = build_publish_plan(
             project_root=args.project,
             manifest=manifest,

@@ -194,6 +194,32 @@ pages:
 
 
 @pytest.mark.asyncio
+async def test_run_async_project_invalid_include_pattern_exits_before_mcp(
+    tmp_path,
+    monkeypatch,
+):
+    (tmp_path / "index.md").write_text("# Home\n", encoding="utf-8")
+    (tmp_path / ".confluence-publish.yml").write_text(
+        """
+include:
+  - "../*.md"
+pages:
+  index.md:
+    page_id: "111111"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    def fail_connect():
+        raise AssertionError("validation error must not connect to MCP")
+
+    monkeypatch.setattr(cli, "connect_mcp_atlassian", fail_connect)
+
+    with pytest.raises(SystemExit, match="parent traversal"):
+        await cli.run_async(["--project", str(tmp_path), "--plan-only"])
+
+
+@pytest.mark.asyncio
 async def test_run_async_project_live_updates_with_comment(tmp_path, monkeypatch):
     (tmp_path / "index.md").write_text("# Home\n", encoding="utf-8")
     (tmp_path / ".confluence-publish.yml").write_text(

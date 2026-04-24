@@ -111,6 +111,22 @@ pages:
         load_manifest(manifest_path)
 
 
+def test_load_manifest_rejects_url_with_partial_page_id_segment(tmp_path):
+    manifest_path = tmp_path / ".confluence-publish.yml"
+    manifest_path.write_text(
+        """
+pages:
+  index.md:
+    page_id: "123"
+    url: "https://criteo.atlassian.net/wiki/pages/1234/Home"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ManifestError, match="url.*page_id"):
+        load_manifest(manifest_path)
+
+
 def test_load_manifest_rejects_duplicate_page_ids(tmp_path):
     manifest_path = tmp_path / ".confluence-publish.yml"
     manifest_path.write_text(

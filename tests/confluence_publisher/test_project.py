@@ -60,6 +60,20 @@ def test_discover_markdown_files_rejects_parent_traversal_patterns(tmp_path):
         discover_markdown_files(tmp_path, include=("../*.md",), exclude=())
 
 
+@pytest.mark.parametrize(
+    ("include", "exclude"),
+    [
+        (("/tmp/*.md",), ()),
+        (("C:/docs/*.md",), ()),
+        (("C:docs/*.md",), ()),
+        (("**/*.md",), ("/tmp/*.md",)),
+    ],
+)
+def test_discover_markdown_files_rejects_absolute_patterns(tmp_path, include, exclude):
+    with pytest.raises(ValueError, match="absolute"):
+        discover_markdown_files(tmp_path, include=include, exclude=exclude)
+
+
 def test_discover_markdown_files_excludes_with_project_glob_semantics(tmp_path):
     (tmp_path / "guide").mkdir()
     (tmp_path / "guide" / "index.md").write_text("# Guide\n", encoding="utf-8")
