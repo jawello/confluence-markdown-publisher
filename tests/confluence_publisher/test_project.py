@@ -1,3 +1,5 @@
+import pytest
+
 from confluence_publisher.project import discover_markdown_files
 
 
@@ -41,3 +43,18 @@ def test_discover_markdown_files_deduplicates_overlapping_includes(tmp_path):
     )
 
     assert result.included == ("guide/index.md",)
+
+
+def test_discover_markdown_files_discovers_md_suffix_case_insensitively(tmp_path):
+    (tmp_path / "README.MD").write_text("# Home\n", encoding="utf-8")
+
+    result = discover_markdown_files(tmp_path, include=("**/*.md",), exclude=())
+
+    assert result.included == ("README.MD",)
+
+
+def test_discover_markdown_files_rejects_parent_traversal_patterns(tmp_path):
+    (tmp_path.parent / "outside.md").write_text("# Outside\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="parent traversal"):
+        discover_markdown_files(tmp_path, include=("../*.md",), exclude=())

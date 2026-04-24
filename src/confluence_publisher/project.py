@@ -19,6 +19,18 @@ def _matches_any(root: Path, relative_path: str, patterns: tuple[str, ...]) -> b
     return any(path.match(pattern) or Path(relative_path).match(pattern) for pattern in patterns)
 
 
+def _validate_patterns(patterns: tuple[str, ...]) -> None:
+    for pattern in patterns:
+        if ".." in pattern.replace("\\", "/").split("/"):
+            raise ValueError(f"Pattern contains parent traversal: {pattern}")
+
+
+def _markdown_glob_pattern(pattern: str) -> str:
+    if pattern.lower().endswith(".md"):
+        return f"{pattern[:-2]}*"
+    return pattern
+
+
 def discover_markdown_files(
     project_root: Path,
     *,
@@ -30,9 +42,12 @@ def discover_markdown_files(
     if not project_root.is_dir():
         raise NotADirectoryError(f"Project root is not a directory: {project_root}")
 
+    _validate_patterns(include)
+    _validate_patterns(exclude)
+
     discovered: set[str] = set()
     for pattern in include:
-        for path in project_root.glob(pattern):
+        for path in project_root.glob(_markdown_glob_pattern(pattern)):
             if path.is_file() and path.suffix.lower() == ".md":
                 discovered.add(_relative_posix(project_root, path))
 
