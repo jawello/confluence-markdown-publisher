@@ -35,11 +35,24 @@ def _positive_int(value: str) -> int:
     return parsed
 
 
+class _StoreExplicit(argparse.Action):
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values,
+        option_string: str | None = None,
+    ) -> None:
+        setattr(namespace, self.dest, values)
+        setattr(namespace, f"{self.dest}_explicit", True)
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="publish-confluence",
         description="Publish Markdown to Confluence storage format with rendered Mermaid diagrams.",
     )
+    parser.set_defaults(output_format_explicit=False, diagram_width_explicit=False)
     parser.add_argument("--source", type=Path)
     parser.add_argument("--page-id")
     parser.add_argument("--title")
@@ -47,8 +60,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--plan-only", action="store_true")
     parser.add_argument("--comment")
-    parser.add_argument("--output-format", choices=("svg", "png"), default="svg")
-    parser.add_argument("--diagram-width", type=_positive_int, default=1000)
+    parser.add_argument(
+        "--output-format",
+        choices=("svg", "png"),
+        default="svg",
+        action=_StoreExplicit,
+    )
+    parser.add_argument(
+        "--diagram-width",
+        type=_positive_int,
+        default=1000,
+        action=_StoreExplicit,
+    )
     parser.add_argument("--mmdc-bin", default="mmdc")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--yes", action="store_true")
@@ -205,8 +228,8 @@ async def run_project_mode(args: argparse.Namespace) -> int:
             discovered_paths=discovery.included,
             excluded_count=discovery.excluded_count,
             version_comment=args.comment,
-            output_format=args.output_format,
-            diagram_width=args.diagram_width,
+            output_format=args.output_format if args.output_format_explicit else None,
+            diagram_width=args.diagram_width if args.diagram_width_explicit else None,
             allow_diagram_fallback=True if args.allow_diagram_fallback else None,
         )
     except (ManifestError, PlannerError, OSError) as exc:

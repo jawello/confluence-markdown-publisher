@@ -222,6 +222,90 @@ pages:
 
 
 @pytest.mark.asyncio
+async def test_run_async_project_dry_run_uses_manifest_publish_defaults(
+    tmp_path, monkeypatch, capsys
+):
+    (tmp_path / "index.md").write_text(
+        "# Home\n\n```mermaid\ngraph LR\nA --> B\n```\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".confluence-publish.yml").write_text(
+        """
+defaults:
+  output_format: "png"
+  diagram_width: 1400
+pages:
+  index.md:
+    page_id: "111111"
+    title: "Home"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    def fail_connect():
+        raise AssertionError("project dry-run must not connect to MCP")
+
+    monkeypatch.setattr(cli, "MermaidRenderer", FakeRenderer)
+    monkeypatch.setattr(cli, "connect_mcp_atlassian", fail_connect)
+
+    result = await cli.run_async(["--project", str(tmp_path), "--dry-run"])
+
+    assert result == 0
+    output = capsys.readouterr().out
+    assert ".png" in output
+    assert 'ac:width="1400"' in output
+    assert ".svg" not in output
+    assert 'ac:width="1000"' not in output
+
+
+@pytest.mark.asyncio
+async def test_run_async_project_dry_run_cli_publish_defaults_override_manifest(
+    tmp_path, monkeypatch, capsys
+):
+    (tmp_path / "index.md").write_text(
+        "# Home\n\n```mermaid\ngraph LR\nA --> B\n```\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".confluence-publish.yml").write_text(
+        """
+defaults:
+  output_format: "png"
+  diagram_width: 1400
+pages:
+  index.md:
+    page_id: "111111"
+    title: "Home"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    def fail_connect():
+        raise AssertionError("project dry-run must not connect to MCP")
+
+    monkeypatch.setattr(cli, "MermaidRenderer", FakeRenderer)
+    monkeypatch.setattr(cli, "connect_mcp_atlassian", fail_connect)
+
+    result = await cli.run_async(
+        [
+            "--project",
+            str(tmp_path),
+            "--dry-run",
+            "--output-format",
+            "svg",
+            "--diagram-width",
+            "900",
+        ]
+    )
+
+    assert result == 0
+    output = capsys.readouterr().out
+    assert ".svg" in output
+    assert 'ac:width="900"' in output
+    assert ".png" not in output
+    assert 'ac:width="1400"' not in output
+
+
+@pytest.mark.asyncio
 async def test_publish_single_page_uses_supplied_version_comment(tmp_path, monkeypatch):
     source = tmp_path / "overview.md"
     source.write_text("# Overview\n\nPlain text.\n", encoding="utf-8")
