@@ -112,3 +112,32 @@ def test_discover_markdown_files_preserves_precise_exclude_glob_shape(tmp_path):
 
     assert result.included == ("README.extra.md",)
     assert result.excluded_count == 2
+
+
+def test_discover_markdown_files_skips_symlinked_markdown_files(tmp_path):
+    outside_path = tmp_path.parent / "outside.md"
+    outside_path.write_text("# Outside\n", encoding="utf-8")
+    (tmp_path / "linked.md").symlink_to(outside_path)
+
+    result = discover_markdown_files(tmp_path, include=("**/*.md",), exclude=())
+
+    assert result.included == ()
+    assert result.excluded_count == 0
+
+
+def test_discover_markdown_files_rejects_missing_project_root(tmp_path):
+    with pytest.raises(FileNotFoundError, match="Project root not found"):
+        discover_markdown_files(tmp_path / "missing", include=("**/*.md",), exclude=())
+
+
+def test_discover_markdown_files_rejects_non_directory_project_root(tmp_path):
+    project_root = tmp_path / "project.md"
+    project_root.write_text("# Not a directory\n", encoding="utf-8")
+
+    with pytest.raises(NotADirectoryError, match="Project root is not a directory"):
+        discover_markdown_files(project_root, include=("**/*.md",), exclude=())
+
+
+def test_discover_markdown_files_rejects_parent_traversal_exclude_patterns(tmp_path):
+    with pytest.raises(ValueError, match="parent traversal"):
+        discover_markdown_files(tmp_path, include=("**/*.md",), exclude=("../*.md",))

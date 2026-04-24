@@ -30,7 +30,7 @@ def _discover_paths(project_root: Path, patterns: tuple[str, ...]) -> set[str]:
     discovered: set[str] = set()
     for pattern in patterns:
         for path in project_root.glob(_markdown_glob_pattern(pattern)):
-            if path.is_file() and path.suffix.lower() == ".md":
+            if not path.is_symlink() and path.is_file() and path.suffix.lower() == ".md":
                 discovered.add(_relative_posix(project_root, path))
     return discovered
 
