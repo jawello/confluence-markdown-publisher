@@ -141,3 +141,35 @@ def test_discover_markdown_files_rejects_non_directory_project_root(tmp_path):
 def test_discover_markdown_files_rejects_parent_traversal_exclude_patterns(tmp_path):
     with pytest.raises(ValueError, match="parent traversal"):
         discover_markdown_files(tmp_path, include=("**/*.md",), exclude=("../*.md",))
+
+
+def test_discover_markdown_files_skips_explicit_symlinked_directory(tmp_path):
+    outside_dir = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside_dir.mkdir()
+    (outside_dir / "external.md").write_text("# External\n", encoding="utf-8")
+    (tmp_path / "linked_dir").symlink_to(outside_dir, target_is_directory=True)
+
+    result = discover_markdown_files(
+        tmp_path,
+        include=("linked_dir/*.md",),
+        exclude=(),
+    )
+
+    assert result.included == ()
+    assert result.excluded_count == 0
+
+
+def test_discover_markdown_files_skips_wildcard_symlinked_directory(tmp_path):
+    outside_dir = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside_dir.mkdir()
+    (outside_dir / "external.md").write_text("# External\n", encoding="utf-8")
+    (tmp_path / "linked_dir").symlink_to(outside_dir, target_is_directory=True)
+
+    result = discover_markdown_files(
+        tmp_path,
+        include=("*/external.md",),
+        exclude=(),
+    )
+
+    assert result.included == ()
+    assert result.excluded_count == 0

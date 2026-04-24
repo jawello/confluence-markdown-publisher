@@ -26,11 +26,24 @@ def _markdown_glob_pattern(pattern: str) -> str:
     return pattern
 
 
+def _has_project_symlink(project_root: Path, path: Path) -> bool:
+    current = path
+    while current != project_root:
+        if current.is_symlink():
+            return True
+        current = current.parent
+    return False
+
+
 def _discover_paths(project_root: Path, patterns: tuple[str, ...]) -> set[str]:
     discovered: set[str] = set()
     for pattern in patterns:
         for path in project_root.glob(_markdown_glob_pattern(pattern)):
-            if not path.is_symlink() and path.is_file() and path.suffix.lower() == ".md":
+            if (
+                not _has_project_symlink(project_root, path)
+                and path.is_file()
+                and path.suffix.lower() == ".md"
+            ):
                 discovered.add(_relative_posix(project_root, path))
     return discovered
 
