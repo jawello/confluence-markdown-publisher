@@ -11,6 +11,11 @@ This keeps Markdown as the source of truth and avoids depending on manual Gliffy
 ## Goals
 
 - Convert Markdown into Confluence storage XHTML.
+- Publish either one Markdown file or a documentation project folder.
+- Use a project manifest as the source of truth for Confluence page IDs.
+- Discover Markdown files recursively from a project folder with include and exclude rules.
+- Validate documentation hierarchy with `index.md` as the logical page for a directory.
+- Print a project publish plan before rendering or publishing.
 - Render Mermaid fenced blocks locally with `mmdc`.
 - Upload rendered diagrams as Confluence page attachments.
 - Insert Confluence image macros that reference those attachments.
@@ -23,7 +28,8 @@ This keeps Markdown as the source of truth and avoids depending on manual Gliffy
 
 - This tool is not a full Markdown-to-Confluence implementation.
 - It does not try to render Mermaid inside Confluence.
-- It does not maintain a Confluence page tree or create pages.
+- It does not create Confluence pages.
+- It does not move, reorder, or repair Confluence page tree relationships.
 - It does not provide a hosted service, daemon, or scheduler.
 - It does not store rendered diagrams permanently in the repository.
 - It does not currently make publishing atomic. Attachments are uploaded before the page body is updated.
@@ -48,13 +54,17 @@ The CLI orchestrates the whole publish operation. Most modules are intentionally
 | Module | Responsibility |
 |---|---|
 | `cli.py` | Parse arguments, coordinate rendering, conversion, preview, confirmation, and publish. |
+| `manifest.py` | Load and validate project manifests. |
+| `project.py` | Discover Markdown files under a project root with include and exclude patterns. |
+| `planner.py` | Build validated project publish plans from discovered files and manifest pages. |
+| `batch.py` | Execute project publish plans by reusing the single-page publishing pipeline. |
 | `converter.py` | Find fenced code blocks, collect Mermaid metadata, convert Markdown to storage-ready HTML fragments. |
 | `renderer.py` | Call `mmdc` and validate that a rendered output file was produced. |
 | `storage.py` | Build Confluence storage macros for code, images, expand blocks, fallback panels, and TOC. |
 | `mcp_atlassian.py` | Start `mcp-atlassian` through `uvx` and call the Confluence MCP tools. |
 | `models.py` | Define immutable data objects and stable diagram attachment names. |
 
-## Publish Flow
+## Single-Page Publish Flow
 
 1. The user runs `publish-confluence` with a source Markdown file and target Confluence page ID.
 2. The CLI reads the Markdown file as UTF-8 text.
@@ -75,6 +85,58 @@ The CLI orchestrates the whole publish operation. Most modules are intentionally
 12. In live mode, the CLI asks for confirmation unless `--yes` is passed.
 13. The MCP client uploads diagram attachments first.
 14. The MCP client updates the Confluence page with `content_format: "storage"`.
+
+## Project Publish Flow
+
+Project mode starts from a documentation folder instead of a single Markdown file:
+
+```bash
+publish-confluence --project docs --plan-only
+```
+
+The default manifest path is `<project>/.confluence-publish.yml`. The manifest stores all Confluence page IDs and optional titles or URLs:
+
+```yaml
+space: "~6393203da593cb822e995262"
+
+include:
+  - "**/*.md"
+
+exclude:
+  - "**/drafts/**"
+
+defaults:
+  version_comment: "Sync documentation from Markdown"
+  output_format: "svg"
+  diagram_width: 1000
+  allow_diagram_fallback: false
+
+pages:
+  index.md:
+    page_id: "111111"
+    title: "Project Documentation"
+    url: "https://criteo.atlassian.net/wiki/pages/111111/Project+Documentation"
+```
+
+Project mode flow:
+
+1. The CLI loads the manifest.
+2. `project.discover_markdown_files()` discovers Markdown files under the project root.
+3. Include and exclude patterns are validated so they cannot use parent traversal or absolute paths.
+4. Symlinked files and files under symlinked directories are skipped to avoid publishing outside-root content.
+5. `planner.build_publish_plan()` checks that every discovered Markdown file exists in `pages`.
+6. Manifest entries that point to missing local files are rejected.
+7. `index.md` is treated as the logical page for its directory.
+8. Nested documents require a nearest ancestor `index.md` entry in the manifest.
+9. Titles come from manifest `title`, then the first Markdown H1, then the file stem.
+10. Optional `url` values are validated by exact page ID path segment.
+11. The CLI prints the publish plan before rendering or connecting to Confluence.
+12. `--plan-only` exits after validation and plan output.
+13. `--dry-run` renders and converts pages, prints storage previews, and never connects to Confluence.
+14. Live project publishing asks for confirmation unless `--yes` is passed.
+15. `batch.publish_project()` publishes each planned page through the same single-page rendering and update pipeline.
+
+Project mode never creates Confluence pages. Missing `page_id` mappings are planning errors that stop the run before rendering or MCP startup.
 
 ## Mermaid Handling
 
@@ -167,6 +229,8 @@ The default behavior is fail-fast:
 - A non-zero `mmdc` exit stops publishing unless fallback mode is enabled.
 - Missing rendered output or an empty output file stops publishing.
 - Invalid Mermaid width directives stop conversion.
+- Invalid project manifests and unsafe include or exclude patterns stop project publishing before side effects.
+- Missing project `page_id` mappings stop project publishing before rendering or MCP startup.
 - Missing Confluence environment variables stop live publishing before MCP startup.
 - MCP tool errors are converted into Python exceptions with bounded error messages.
 
@@ -185,9 +249,12 @@ The tool is designed for local, operator-driven publishing.
 Safety controls:
 
 - `--dry-run` performs rendering and conversion without connecting to Confluence.
+- `--plan-only` validates a project and prints the publish plan without rendering or connecting to Confluence.
 - Live publishing requires an interactive `yes` confirmation unless `--yes` is passed.
 - Attachment names are listed in the preview before publishing.
 - The first part of generated storage is printed before publishing.
+- Project mode fails before side effects when discovered Markdown files are missing manifest `page_id` mappings.
+- Project discovery rejects unsafe include and exclude patterns and skips symlinked Markdown paths.
 - Confluence credentials stay in environment variables.
 - Rendered diagrams are written only to a temporary directory and removed when the process exits.
 
@@ -208,6 +275,10 @@ Coverage areas:
 - Mermaid renderer subprocess behavior.
 - MCP client command construction, response parsing, and error handling.
 - Attachment naming stability.
+- Project manifest loading and validation.
+- Markdown project discovery with include, exclude, and safety boundaries.
+- Publish-plan construction and project-mode CLI orchestration.
+- Batch publishing behavior in dry-run and live modes.
 
 The standard verification command is:
 
@@ -238,6 +309,23 @@ uv run publish-confluence \
   --yes
 ```
 
+Project plan preview:
+
+```bash
+uv run publish-confluence \
+  --project docs \
+  --plan-only
+```
+
+Project publish:
+
+```bash
+uv run publish-confluence \
+  --project docs \
+  --comment "Sync guide updates" \
+  --yes
+```
+
 When the CLI is used from another repository:
 
 ```bash
@@ -261,11 +349,12 @@ uv run publish-confluence \
 
 The current boundaries leave several incremental extension points:
 
-- Batch publishing multiple Markdown files to known page IDs.
-- A page mapping file for documentation projects.
+- Generating a manifest skeleton from a documentation folder.
+- Filling missing manifest URLs from Confluence page IDs.
+- Checking local Markdown links between project documents.
 - Optional cleanup or replacement policy for old diagram attachments.
 - Support for more Markdown constructs if needed.
 - Additional renderers if diagrams other than Mermaid become necessary.
 - A second backend that uses Confluence REST directly, while keeping the CLI and converter unchanged.
 
-These are intentionally not implemented in the initial design because the current operational need is a local CLI that publishes a known document to a known Confluence page with rendered Mermaid diagrams.
+These are intentionally outside the current project-mode scope because the operational need is still local, operator-driven publishing to existing Confluence pages.
