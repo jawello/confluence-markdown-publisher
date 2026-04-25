@@ -80,6 +80,7 @@ Rules:
 
 When preparing docs for this tool, use:
 
+- [docs/documentation-style.md](docs/documentation-style.md)
 - [docs/documentation-agent-prompt.md](docs/documentation-agent-prompt.md)
 
-That file contains a reusable prompt for agents that need to organize Markdown documentation and create `.confluence-publish.yml`.
+The style guide is the stable documentation code-style contract. The prompt is the reusable task text for agents that need to organize Markdown documentation and create `.confluence-publish.yml`.

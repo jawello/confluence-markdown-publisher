@@ -94,6 +94,8 @@ pages:
 
 Project mode never creates Confluence pages. Every discovered Markdown file must have a `page_id` in the manifest.
 
+For documentation authoring rules, use [docs/documentation-style.md](docs/documentation-style.md). For delegated preparation work, use [docs/documentation-agent-prompt.md](docs/documentation-agent-prompt.md).
+
 Publish with a version comment:
 
 ```bash

@@ -2,8 +2,12 @@
 
 Use this prompt when asking an agent to prepare a documentation folder for `confluence-markdown-publisher` project mode.
 
+This prompt follows the stable documentation rules in [documentation-style.md](documentation-style.md). If a project-specific request conflicts with the style guide, call out the conflict explicitly before changing the documentation.
+
 `````text
 You are preparing Markdown documentation for publishing with `confluence-markdown-publisher`.
+
+Follow the repository documentation style guide in `docs/documentation-style.md`.
 
 Goal:
 - Organize the documentation as a project folder that can be published with:
