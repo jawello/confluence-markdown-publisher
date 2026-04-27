@@ -128,6 +128,10 @@ class FakeClient:
         )
         return PageInfo(page_id=page_id, title=title)
 
+    async def search_pages_by_title(self, *, space_key: str, title: str):
+        self.calls.append(("search_pages_by_title", space_key, title))
+        return []
+
     async def upload_attachment(self, page_id: str, file_path: Path) -> None:
         self.calls.append(("upload_attachment", page_id, file_path.name, file_path.exists()))
 
@@ -292,6 +296,8 @@ pages:
 
     assert result == 0
     assert client.calls == [
+        ("search_pages_by_title", "~6393203da593cb822e995262", "Home"),
+        ("search_pages_by_title", "~6393203da593cb822e995262", "Guide"),
         ("create_page", "~6393203da593cb822e995262", "Home", "999999", True, "700001"),
         ("create_page", "~6393203da593cb822e995262", "Guide", "700001", True, "700002"),
         (

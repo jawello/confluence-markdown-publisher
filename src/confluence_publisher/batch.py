@@ -34,12 +34,36 @@ def format_publish_plan(plan: PublishPlan) -> str:
     return "\n".join(lines)
 
 
+async def _preflight_missing_page_titles(plan: PublishPlan, *, client) -> None:
+    if plan.space is None:
+        return
+
+    collisions: list[str] = []
+    checked_titles: set[str] = set()
+    for item in plan.items:
+        if item.page_id is not None or item.title in checked_titles:
+            continue
+        checked_titles.add(item.title)
+        matches = await client.search_pages_by_title(space_key=plan.space, title=item.title)
+        if matches:
+            pages = ", ".join(f"{page.page_id} ({page.title})" for page in matches)
+            collisions.append(f"{item.source_path}: {item.title} already exists as {pages}")
+
+    if collisions:
+        details = "; ".join(collisions)
+        raise RuntimeError(
+            "Cannot create missing Confluence pages because titles already exist "
+            f"in the target space: {details}"
+        )
+
+
 async def publish_project(plan: PublishPlan, *, client, dry_run: bool, mmdc_bin: str) -> int:
     page_ids = {item.source_path: item.page_id for item in plan.items if item.page_id is not None}
 
     if plan.create_missing_pages and not dry_run:
         if plan.root_page_id is None or plan.space is None:
             raise RuntimeError("Cannot create missing pages without root page and space")
+        await _preflight_missing_page_titles(plan, client=client)
         created_page_ids: dict[str, str] = {}
         for item in plan.items:
             if item.page_id is not None:

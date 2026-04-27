@@ -13,6 +13,7 @@ from mcp.client.stdio import stdio_client
 from .models import PageInfo
 
 REQUIRED_TOOLS = (
+    "confluence_search",
     "confluence_get_page",
     "confluence_get_attachments",
     "confluence_create_page",
@@ -75,28 +76,61 @@ def _content_message(content: object) -> str:
     return message
 
 
-def _json_text_content(content: object) -> dict[str, Any]:
+def _json_content(content: object) -> object | None:
     for text in _content_texts(content):
         try:
-            payload = json.loads(text)
+            return json.loads(text)
         except json.JSONDecodeError:
             continue
-        if isinstance(payload, dict):
-            return payload
-    return {}
+    return None
 
 
-def _mapping_content(content: object) -> dict[str, Any]:
+def _content_payload(content: object) -> object | None:
     if isinstance(content, dict):
+        if set(content) == {"result"}:
+            wrapped = _content_payload(content.get("result"))
+            if wrapped is not None:
+                return wrapped
         return content
-    return _json_text_content(content)
+    return _json_content(content)
 
 
-def _unwrap_wrapped_result(payload: dict[str, Any]) -> dict[str, Any]:
-    if set(payload) != {"result"}:
-        return payload
-    wrapped = _mapping_content(payload.get("result"))
-    return wrapped or payload
+def _result_payload(result: object) -> object | None:
+    if isinstance(result, dict):
+        if result.get("isError"):
+            _raise_mcp_error(result.get("content"))
+        structured = _content_payload(result.get("structuredContent"))
+        if structured is not None:
+            return structured
+        return _json_content(result.get("content"))
+
+    if getattr(result, "isError", False):
+        _raise_mcp_error(getattr(result, "content", None))
+
+    structured = _content_payload(getattr(result, "structuredContent", None))
+    if structured is not None:
+        return structured
+    return _json_content(getattr(result, "content", None))
+
+
+def _cql_string(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _page_infos(payload: object, tool_name: str) -> list[PageInfo]:
+    if not isinstance(payload, list):
+        raise McpToolError(f"{tool_name} returned no page list")
+    pages: list[PageInfo] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            raise McpToolError(f"{tool_name} returned invalid page item")
+        page_id = item.get("id")
+        title = item.get("title")
+        if page_id is None or str(page_id) == "" or not isinstance(title, str) or not title:
+            raise McpToolError(f"{tool_name} returned invalid page item")
+        pages.append(PageInfo(page_id=str(page_id), title=title))
+    return pages
 
 
 def _raise_mcp_error(content: object) -> None:
@@ -107,21 +141,10 @@ def _raise_mcp_error(content: object) -> None:
 
 
 def _structured_content(result: object) -> dict[str, Any]:
-    if isinstance(result, dict):
-        if result.get("isError"):
-            _raise_mcp_error(result.get("content"))
-        structured = _mapping_content(result.get("structuredContent"))
-        if structured:
-            return _unwrap_wrapped_result(structured)
-        return _json_text_content(result.get("content"))
-
-    if getattr(result, "isError", False):
-        _raise_mcp_error(getattr(result, "content", None))
-
-    structured = _mapping_content(getattr(result, "structuredContent", None))
-    if structured:
-        return _unwrap_wrapped_result(structured)
-    return _json_text_content(getattr(result, "content", None))
+    payload = _result_payload(result)
+    if isinstance(payload, dict):
+        return payload
+    return {}
 
 
 class McpAtlassianClient:
@@ -170,6 +193,26 @@ class McpAtlassianClient:
             page_id=page_id,
             title=page_title if isinstance(page_title, str) and page_title else title,
         )
+
+    async def search_pages_by_title(
+        self,
+        *,
+        space_key: str,
+        title: str,
+        limit: int = 10,
+    ) -> list[PageInfo]:
+        result = await self.session.call_tool(
+            "confluence_search",
+            {
+                "query": (
+                    f"title = {_cql_string(title)} "
+                    f"AND type = page AND space = {_cql_string(space_key)}"
+                ),
+                "limit": limit,
+                "spaces_filter": space_key,
+            },
+        )
+        return _page_infos(_result_payload(result), "confluence_search")
 
     async def upload_attachment(self, page_id: str, file_path: Path) -> None:
         result = await self.session.call_tool(

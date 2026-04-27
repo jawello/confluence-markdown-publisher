@@ -3,12 +3,29 @@ from pathlib import Path
 import pytest
 
 from confluence_publisher import batch
+from confluence_publisher.models import PageInfo
 from confluence_publisher.planner import PlannedPage, PublishPlan
 
 
 class FakeClient:
-    def __init__(self):
+    def __init__(self, search_results=None):
         self.calls = []
+        self.search_results = search_results or {}
+
+    async def search_pages_by_title(self, *, space_key: str, title: str):
+        self.calls.append(("search_pages_by_title", space_key, title))
+        return self.search_results.get(title, [])
+
+    async def create_page(
+        self,
+        *,
+        space_key: str,
+        title: str,
+        parent_id: str,
+        storage: str,
+    ) -> PageInfo:
+        self.calls.append(("create_page", space_key, title, parent_id, "<p>" in storage))
+        return PageInfo(page_id="222222", title=title)
 
     async def upload_attachment(self, page_id: str, file_path: Path) -> None:
         self.calls.append(("upload_attachment", page_id, file_path.name))
@@ -41,6 +58,33 @@ def make_plan(tmp_path):
                 page_id="111111",
                 title="Home",
                 url="https://criteo.atlassian.net/wiki/pages/111111/Home",
+                parent_source_path=None,
+            ),
+        ),
+    )
+
+
+def make_create_plan(tmp_path):
+    source = tmp_path / "index.md"
+    source.write_text("# Home\n\nPlain text.\n", encoding="utf-8")
+    return PublishPlan(
+        project_root=tmp_path,
+        manifest_path=tmp_path / ".confluence-publish.yml",
+        version_comment="Sync docs",
+        output_format="svg",
+        diagram_width=1000,
+        allow_diagram_fallback=False,
+        excluded_count=0,
+        space="~6393203da593cb822e995262",
+        root_page_id="999999",
+        create_missing_pages=True,
+        items=(
+            PlannedPage(
+                source_path="index.md",
+                absolute_path=source,
+                page_id=None,
+                title="Post-Deployment Verification",
+                url=None,
                 parent_source_path=None,
             ),
         ),
@@ -110,3 +154,26 @@ async def test_publish_project_live_updates_each_page_with_comment(tmp_path):
 
     assert result == 0
     assert client.calls == [("update_page_storage", "111111", "Home", "Sync docs", True)]
+
+
+@pytest.mark.asyncio
+async def test_publish_project_preflights_title_collisions_before_creating(tmp_path):
+    plan = make_create_plan(tmp_path)
+    client = FakeClient(
+        search_results={
+            "Post-Deployment Verification": [
+                PageInfo(page_id="5155817687", title="Post-Deployment Verification")
+            ]
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="Post-Deployment Verification.*5155817687"):
+        await batch.publish_project(plan, client=client, dry_run=False, mmdc_bin="mmdc")
+
+    assert client.calls == [
+        (
+            "search_pages_by_title",
+            "~6393203da593cb822e995262",
+            "Post-Deployment Verification",
+        )
+    ]

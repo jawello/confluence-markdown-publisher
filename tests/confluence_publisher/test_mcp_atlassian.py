@@ -31,12 +31,14 @@ class FakeMcpSession:
         upload_result=None,
         update_result=None,
         create_result=None,
+        search_result=None,
     ):
         self.calls = []
         self.page_result = page_result
         self.upload_result = upload_result
         self.update_result = update_result
         self.create_result = create_result
+        self.search_result = search_result
 
     async def call_tool(self, name, arguments):
         self.calls.append((name, arguments))
@@ -56,6 +58,8 @@ class FakeMcpSession:
                     "page": {"id": "616161", "title": arguments["title"]},
                 },
             }
+        if name == "confluence_search" and self.search_result is not None:
+            return self.search_result
         return {"structuredContent": {"ok": True}}
 
 
@@ -229,6 +233,55 @@ async def test_client_create_page_parses_fastmcp_wrapped_json_result():
 
     assert page.page_id == "5155097071"
     assert page.title == "Overview"
+
+
+@pytest.mark.asyncio
+async def test_client_search_pages_by_title_parses_fastmcp_wrapped_json_result():
+    result = CallToolResult(
+        content=[],
+        structuredContent={
+            "result": (
+                '[{"id": "5155817687", "title": "Post-Deployment Verification"}]'
+            )
+        },
+    )
+    session = FakeMcpSession(search_result=result)
+    client = McpAtlassianClient(session)
+
+    pages = await client.search_pages_by_title(
+        space_key="~6393203da593cb822e995262",
+        title="Post-Deployment Verification",
+    )
+
+    assert [(page.page_id, page.title) for page in pages] == [
+        ("5155817687", "Post-Deployment Verification")
+    ]
+    assert session.calls == [
+        (
+            "confluence_search",
+            {
+                "query": (
+                    'title = "Post-Deployment Verification" '
+                    'AND type = page AND space = "~6393203da593cb822e995262"'
+                ),
+                "limit": 10,
+                "spaces_filter": "~6393203da593cb822e995262",
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_client_search_pages_by_title_rejects_mcp_error():
+    result = CallToolResult(content=[TextContent(type="text", text="search failed")], isError=True)
+    session = FakeMcpSession(search_result=result)
+    client = McpAtlassianClient(session)
+
+    with pytest.raises(McpToolError, match="search failed"):
+        await client.search_pages_by_title(
+            space_key="~6393203da593cb822e995262",
+            title="Post-Deployment Verification",
+        )
 
 
 @pytest.mark.asyncio
