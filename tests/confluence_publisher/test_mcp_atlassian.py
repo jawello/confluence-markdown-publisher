@@ -101,6 +101,22 @@ def test_structured_content_accepts_json_string_structured_content():
     }
 
 
+def test_structured_content_accepts_fastmcp_wrapped_json_result():
+    result = {
+        "structuredContent": {
+            "result": (
+                '{"message": "Page created successfully", '
+                '"page": {"id": "5155097071", "title": "Overview"}}'
+            )
+        }
+    }
+
+    assert _structured_content(result) == {
+        "message": "Page created successfully",
+        "page": {"id": "5155097071", "title": "Overview"},
+    }
+
+
 def test_structured_content_raises_on_mcp_error_result():
     result = CallToolResult(content=[TextContent(type="text", text="page not found")], isError=True)
 
@@ -187,6 +203,31 @@ async def test_client_create_page_parses_json_text_response():
     )
 
     assert page.page_id == "5155096957"
+    assert page.title == "Overview"
+
+
+@pytest.mark.asyncio
+async def test_client_create_page_parses_fastmcp_wrapped_json_result():
+    result = CallToolResult(
+        content=[],
+        structuredContent={
+            "result": (
+                '{"message": "Page created successfully", '
+                '"page": {"id": "5155097071", "title": "Overview"}}'
+            )
+        },
+    )
+    session = FakeMcpSession(create_result=result)
+    client = McpAtlassianClient(session)
+
+    page = await client.create_page(
+        space_key="~6393203da593cb822e995262",
+        title="Overview",
+        parent_id="999999",
+        storage="<p>Created by publisher.</p>",
+    )
+
+    assert page.page_id == "5155097071"
     assert page.title == "Overview"
 
 

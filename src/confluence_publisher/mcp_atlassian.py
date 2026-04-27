@@ -92,6 +92,13 @@ def _mapping_content(content: object) -> dict[str, Any]:
     return _json_text_content(content)
 
 
+def _unwrap_wrapped_result(payload: dict[str, Any]) -> dict[str, Any]:
+    if set(payload) != {"result"}:
+        return payload
+    wrapped = _mapping_content(payload.get("result"))
+    return wrapped or payload
+
+
 def _raise_mcp_error(content: object) -> None:
     message = _content_message(content)
     if message:
@@ -105,7 +112,7 @@ def _structured_content(result: object) -> dict[str, Any]:
             _raise_mcp_error(result.get("content"))
         structured = _mapping_content(result.get("structuredContent"))
         if structured:
-            return structured
+            return _unwrap_wrapped_result(structured)
         return _json_text_content(result.get("content"))
 
     if getattr(result, "isError", False):
@@ -113,7 +120,7 @@ def _structured_content(result: object) -> dict[str, Any]:
 
     structured = _mapping_content(getattr(result, "structuredContent", None))
     if structured:
-        return structured
+        return _unwrap_wrapped_result(structured)
     return _json_text_content(getattr(result, "content", None))
 
 
