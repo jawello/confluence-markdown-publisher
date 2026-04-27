@@ -87,6 +87,20 @@ def test_structured_content_falls_back_to_json_text_content():
     assert _structured_content(result) == {"id": "5151854234", "title": "Test"}
 
 
+def test_structured_content_accepts_json_string_structured_content():
+    result = {
+        "structuredContent": (
+            '{"message": "Page created successfully", '
+            '"page": {"id": "5155096957", "title": "Overview"}}'
+        )
+    }
+
+    assert _structured_content(result) == {
+        "message": "Page created successfully",
+        "page": {"id": "5155096957", "title": "Overview"},
+    }
+
+
 def test_structured_content_raises_on_mcp_error_result():
     result = CallToolResult(content=[TextContent(type="text", text="page not found")], isError=True)
 
@@ -147,6 +161,33 @@ async def test_client_creates_page_under_parent_as_storage():
             },
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_client_create_page_parses_json_text_response():
+    result = CallToolResult(
+        content=[
+            TextContent(
+                type="text",
+                text=(
+                    '{"message": "Page created successfully", '
+                    '"page": {"id": "5155096957", "title": "Overview"}}'
+                ),
+            )
+        ],
+    )
+    session = FakeMcpSession(create_result=result)
+    client = McpAtlassianClient(session)
+
+    page = await client.create_page(
+        space_key="~6393203da593cb822e995262",
+        title="Overview",
+        parent_id="999999",
+        storage="<p>Created by publisher.</p>",
+    )
+
+    assert page.page_id == "5155096957"
+    assert page.title == "Overview"
 
 
 @pytest.mark.asyncio

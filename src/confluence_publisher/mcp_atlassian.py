@@ -57,6 +57,8 @@ def _mcp_env() -> dict[str, str]:
 def _content_texts(content: object) -> list[str]:
     if not content:
         return []
+    if isinstance(content, str):
+        return [content]
     items = content if isinstance(content, list) else [content]
     texts = []
     for item in items:
@@ -84,6 +86,12 @@ def _json_text_content(content: object) -> dict[str, Any]:
     return {}
 
 
+def _mapping_content(content: object) -> dict[str, Any]:
+    if isinstance(content, dict):
+        return content
+    return _json_text_content(content)
+
+
 def _raise_mcp_error(content: object) -> None:
     message = _content_message(content)
     if message:
@@ -95,16 +103,16 @@ def _structured_content(result: object) -> dict[str, Any]:
     if isinstance(result, dict):
         if result.get("isError"):
             _raise_mcp_error(result.get("content"))
-        structured = result.get("structuredContent")
-        if isinstance(structured, dict):
+        structured = _mapping_content(result.get("structuredContent"))
+        if structured:
             return structured
         return _json_text_content(result.get("content"))
 
     if getattr(result, "isError", False):
         _raise_mcp_error(getattr(result, "content", None))
 
-    structured = getattr(result, "structuredContent", None)
-    if isinstance(structured, dict):
+    structured = _mapping_content(getattr(result, "structuredContent", None))
+    if structured:
         return structured
     return _json_text_content(getattr(result, "content", None))
 
