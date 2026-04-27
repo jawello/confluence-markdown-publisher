@@ -155,6 +155,23 @@ async def test_client_get_page_rejects_missing_title():
 
 
 @pytest.mark.asyncio
+async def test_client_get_page_raises_mcp_json_error_message():
+    result = CallToolResult(
+        content=[
+            TextContent(
+                type="text",
+                text='{"error": "Failed to retrieve page by ID \'5155097071\': no access"}',
+            )
+        ],
+    )
+    session = FakeMcpSession(page_result=result)
+    client = McpAtlassianClient(session)
+
+    with pytest.raises(McpToolError, match="no access"):
+        await client.get_page("5155097071")
+
+
+@pytest.mark.asyncio
 async def test_client_creates_page_under_parent_as_storage():
     session = FakeMcpSession()
     client = McpAtlassianClient(session)

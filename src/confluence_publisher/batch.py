@@ -57,12 +57,48 @@ async def _preflight_missing_page_titles(plan: PublishPlan, *, client) -> None:
         )
 
 
+async def _preflight_missing_page_parents(
+    plan: PublishPlan,
+    *,
+    client,
+    page_ids: dict[str, str],
+) -> None:
+    parent_usages: dict[str, list[str]] = {}
+    for item in plan.items:
+        if item.page_id is not None:
+            continue
+        if item.parent_source_path is not None:
+            parent_id = page_ids.get(item.parent_source_path)
+            if parent_id is None:
+                continue
+        else:
+            parent_id = plan.root_page_id
+        if parent_id is not None:
+            parent_usages.setdefault(parent_id, []).append(item.source_path)
+
+    failures: list[str] = []
+    for parent_id, source_paths in parent_usages.items():
+        try:
+            await client.get_page(parent_id)
+        except Exception as exc:
+            sources = ", ".join(source_paths)
+            failures.append(f"{parent_id} for {sources}: {exc}")
+
+    if failures:
+        details = "; ".join(failures)
+        raise RuntimeError(
+            "Cannot create missing Confluence pages because parent pages are not "
+            f"readable by the current credentials: {details}"
+        )
+
+
 async def publish_project(plan: PublishPlan, *, client, dry_run: bool, mmdc_bin: str) -> int:
     page_ids = {item.source_path: item.page_id for item in plan.items if item.page_id is not None}
 
     if plan.create_missing_pages and not dry_run:
         if plan.root_page_id is None or plan.space is None:
             raise RuntimeError("Cannot create missing pages without root page and space")
+        await _preflight_missing_page_parents(plan, client=client, page_ids=page_ids)
         await _preflight_missing_page_titles(plan, client=client)
         created_page_ids: dict[str, str] = {}
         for item in plan.items:

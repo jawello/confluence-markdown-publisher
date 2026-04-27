@@ -133,6 +133,12 @@ def _page_infos(payload: object, tool_name: str) -> list[PageInfo]:
     return pages
 
 
+def _raise_payload_error(payload: dict[str, Any], tool_name: str) -> None:
+    error = payload.get("error")
+    if isinstance(error, str) and error:
+        raise McpToolError(f"{tool_name} returned an error: {error}")
+
+
 def _raise_mcp_error(content: object) -> None:
     message = _content_message(content)
     if message:
@@ -157,6 +163,7 @@ class McpAtlassianClient:
             {"page_id": page_id, "include_metadata": True, "convert_to_markdown": False},
         )
         payload = _structured_content(result)
+        _raise_payload_error(payload, "confluence_get_page")
         title = payload.get("title")
         if not isinstance(title, str) or not title:
             raise McpToolError(f"confluence_get_page returned no title for page {page_id}")

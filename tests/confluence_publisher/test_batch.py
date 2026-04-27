@@ -3,14 +3,22 @@ from pathlib import Path
 import pytest
 
 from confluence_publisher import batch
+from confluence_publisher.mcp_atlassian import McpToolError
 from confluence_publisher.models import PageInfo
 from confluence_publisher.planner import PlannedPage, PublishPlan
 
 
 class FakeClient:
-    def __init__(self, search_results=None):
+    def __init__(self, search_results=None, page_errors=None):
         self.calls = []
         self.search_results = search_results or {}
+        self.page_errors = page_errors or {}
+
+    async def get_page(self, page_id: str) -> PageInfo:
+        self.calls.append(("get_page", page_id))
+        if page_id in self.page_errors:
+            raise self.page_errors[page_id]
+        return PageInfo(page_id=page_id, title=f"Page {page_id}")
 
     async def search_pages_by_title(self, *, space_key: str, title: str):
         self.calls.append(("search_pages_by_title", space_key, title))
@@ -171,9 +179,27 @@ async def test_publish_project_preflights_title_collisions_before_creating(tmp_p
         await batch.publish_project(plan, client=client, dry_run=False, mmdc_bin="mmdc")
 
     assert client.calls == [
+        ("get_page", "999999"),
         (
             "search_pages_by_title",
             "~6393203da593cb822e995262",
             "Post-Deployment Verification",
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_publish_project_preflights_parent_visibility_before_title_search(tmp_path):
+    plan = make_create_plan(tmp_path)
+    client = FakeClient(
+        page_errors={
+            "999999": McpToolError(
+                "Failed to retrieve page by ID '999999': no permission to view content"
+            )
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="999999.*no permission"):
+        await batch.publish_project(plan, client=client, dry_run=False, mmdc_bin="mmdc")
+
+    assert client.calls == [("get_page", "999999")]
