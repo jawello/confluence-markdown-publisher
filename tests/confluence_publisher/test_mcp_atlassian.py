@@ -25,11 +25,18 @@ def test_build_server_command_limits_enabled_tools_and_version():
 
 
 class FakeMcpSession:
-    def __init__(self, page_result=None, upload_result=None, update_result=None):
+    def __init__(
+        self,
+        page_result=None,
+        upload_result=None,
+        update_result=None,
+        create_result=None,
+    ):
         self.calls = []
         self.page_result = page_result
         self.upload_result = upload_result
         self.update_result = update_result
+        self.create_result = create_result
 
     async def call_tool(self, name, arguments):
         self.calls.append((name, arguments))
@@ -41,6 +48,14 @@ class FakeMcpSession:
             return self.upload_result
         if name == "confluence_update_page" and self.update_result is not None:
             return self.update_result
+        if name == "confluence_create_page":
+            if self.create_result is not None:
+                return self.create_result
+            return {
+                "structuredContent": {
+                    "page": {"id": "616161", "title": arguments["title"]},
+                },
+            }
         return {"structuredContent": {"ok": True}}
 
 
@@ -103,6 +118,35 @@ async def test_client_get_page_rejects_missing_title():
 
     with pytest.raises(McpToolError, match="5151854234"):
         await client.get_page("5151854234")
+
+
+@pytest.mark.asyncio
+async def test_client_creates_page_under_parent_as_storage():
+    session = FakeMcpSession()
+    client = McpAtlassianClient(session)
+
+    page = await client.create_page(
+        space_key="~6393203da593cb822e995262",
+        title="Guide",
+        parent_id="999999",
+        storage="<p>Created by publisher.</p>",
+    )
+
+    assert page.page_id == "616161"
+    assert page.title == "Guide"
+    assert session.calls == [
+        (
+            "confluence_create_page",
+            {
+                "space_key": "~6393203da593cb822e995262",
+                "title": "Guide",
+                "content": "<p>Created by publisher.</p>",
+                "parent_id": "999999",
+                "content_format": "storage",
+                "include_content": False,
+            },
+        )
+    ]
 
 
 @pytest.mark.asyncio

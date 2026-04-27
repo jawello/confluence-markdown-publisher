@@ -6,6 +6,7 @@ from confluence_publisher.manifest import (
     ManifestError,
     ProjectManifest,
     load_manifest,
+    write_manifest_page_ids,
 )
 
 
@@ -95,6 +96,44 @@ pages:
         load_manifest(manifest_path)
 
 
+def test_load_manifest_allows_missing_page_id_with_create_mode_root_url(tmp_path):
+    manifest_path = tmp_path / ".confluence-publish.yml"
+    manifest_path.write_text(
+        """
+root:
+  url: "https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/pages/999999/Documentation"
+pages:
+  index.md:
+    title: "Home"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    manifest = load_manifest(manifest_path, allow_missing_page_ids=True)
+
+    assert manifest.root_page_id == "999999"
+    assert manifest.root_url.endswith("/999999/Documentation")
+    assert manifest.space == "~6393203da593cb822e995262"
+    assert manifest.pages["index.md"].page_id is None
+
+
+def test_load_manifest_requires_root_url_with_page_id(tmp_path):
+    manifest_path = tmp_path / ".confluence-publish.yml"
+    manifest_path.write_text(
+        """
+root:
+  url: "https://criteo.atlassian.net/wiki/spaces/DOC/overview"
+pages:
+  index.md:
+    page_id: "111111"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ManifestError, match="root.url.*page ID"):
+        load_manifest(manifest_path)
+
+
 def test_load_manifest_rejects_url_that_does_not_contain_page_id(tmp_path):
     manifest_path = tmp_path / ".confluence-publish.yml"
     manifest_path.write_text(
@@ -109,6 +148,34 @@ pages:
 
     with pytest.raises(ManifestError, match="url.*111111"):
         load_manifest(manifest_path)
+
+
+def test_write_manifest_page_ids_updates_created_pages(tmp_path):
+    manifest_path = tmp_path / ".confluence-publish.yml"
+    manifest_path.write_text(
+        """
+root:
+  page_id: "999999"
+pages:
+  index.md:
+    title: "Home"
+  guide/index.md:
+    title: "Guide"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    write_manifest_page_ids(
+        manifest_path,
+        {
+            "index.md": "111111",
+            "guide/index.md": "222222",
+        },
+    )
+
+    manifest = load_manifest(manifest_path)
+    assert manifest.pages["index.md"].page_id == "111111"
+    assert manifest.pages["guide/index.md"].page_id == "222222"
 
 
 def test_load_manifest_rejects_url_with_partial_page_id_segment(tmp_path):

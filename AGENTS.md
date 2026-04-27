@@ -65,8 +65,9 @@ Project mode uses `.confluence-publish.yml` from the docs root unless `--manifes
 
 Rules:
 
-- Every discovered Markdown file must have a `pages` entry with `page_id`.
-- Project mode never creates Confluence pages.
+- Every discovered Markdown file must have a `pages` entry. Normal mode also requires `page_id`.
+- Project mode does not create Confluence pages unless `--create-missing-pages` is explicitly passed.
+- `--create-missing-pages` requires manifest root page metadata and writes new `page_id` values back to `.confluence-publish.yml`.
 - `index.md` is the logical page for a directory.
 - Nested documents require a nearest ancestor `index.md` manifest entry.
 - Manifest page keys must be POSIX relative paths.

@@ -59,6 +59,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--project", type=Path)
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--plan-only", action="store_true")
+    parser.add_argument("--create-missing-pages", action="store_true")
     parser.add_argument("--comment")
     parser.add_argument(
         "--output-format",
@@ -89,6 +90,8 @@ def validate_args(args: argparse.Namespace) -> None:
             raise SystemExit("--page-id is required with --source")
         if args.plan_only:
             raise SystemExit("--plan-only is only supported with --project")
+        if args.create_missing_pages:
+            raise SystemExit("--create-missing-pages is only supported with --project")
     if args.project is not None:
         if args.page_id:
             raise SystemExit("--page-id is not supported with --project")
@@ -216,7 +219,10 @@ async def run_project_mode(args: argparse.Namespace) -> int:
 
     manifest_path = args.manifest or args.project / ".confluence-publish.yml"
     try:
-        manifest = load_manifest(manifest_path)
+        manifest = load_manifest(
+            manifest_path,
+            allow_missing_page_ids=args.create_missing_pages,
+        )
         try:
             discovery = discover_markdown_files(
                 args.project,
@@ -234,6 +240,7 @@ async def run_project_mode(args: argparse.Namespace) -> int:
             output_format=args.output_format if args.output_format_explicit else None,
             diagram_width=args.diagram_width if args.diagram_width_explicit else None,
             allow_diagram_fallback=True if args.allow_diagram_fallback else None,
+            create_missing_pages=args.create_missing_pages,
         )
     except (ManifestError, PlannerError, OSError) as exc:
         raise SystemExit(str(exc)) from exc

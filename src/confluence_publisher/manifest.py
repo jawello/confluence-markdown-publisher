@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import yaml
 
@@ -57,7 +57,7 @@ _UniqueKeySafeLoader.add_constructor(
 @dataclass(frozen=True)
 class ManifestPage:
     path: str
-    page_id: str
+    page_id: str | None
     title: str | None = None
     url: str | None = None
 
@@ -73,6 +73,8 @@ class ProjectManifest:
     diagram_width: int
     allow_diagram_fallback: bool
     pages: dict[str, ManifestPage]
+    root_page_id: str | None = None
+    root_url: str | None = None
 
 
 def _as_mapping(value: Any, field_name: str) -> dict[str, Any]:
@@ -125,7 +127,60 @@ def _url_contains_page_id_segment(url: str, page_id: str) -> bool:
     return any(unquote(segment) == page_id for segment in path_segments)
 
 
-def load_manifest(path: Path) -> ProjectManifest:
+def _page_id_from_url(url: str) -> str | None:
+    parsed = urlparse(url)
+    query_page_ids = parse_qs(parsed.query).get("pageId", [])
+    for page_id in query_page_ids:
+        if page_id:
+            return page_id
+
+    segments = [unquote(segment) for segment in parsed.path.split("/") if segment]
+    for index, segment in enumerate(segments[:-1]):
+        if segment == "pages" and segments[index + 1]:
+            return segments[index + 1]
+    return None
+
+
+def _space_from_url(url: str) -> str | None:
+    segments = [unquote(segment) for segment in urlparse(url).path.split("/") if segment]
+    for index, segment in enumerate(segments[:-1]):
+        if segment == "spaces" and segments[index + 1]:
+            return segments[index + 1]
+    return None
+
+
+def _root_metadata(root: dict[str, Any]) -> tuple[str | None, str | None, str | None]:
+    root_raw = root.get("root")
+    root_page_id = _optional_str(root.get("root_page_id"), "root_page_id")
+    root_url = _optional_str(root.get("root_url"), "root_url")
+
+    if root_raw is not None:
+        root_data = _as_mapping(root_raw, "root")
+        nested_page_id = _optional_str(root_data.get("page_id"), "root.page_id")
+        nested_url = _optional_str(root_data.get("url"), "root.url")
+        if (
+            root_page_id is not None
+            and nested_page_id is not None
+            and root_page_id != nested_page_id
+        ):
+            raise ManifestError("root.page_id conflicts with root_page_id")
+        if root_url is not None and nested_url is not None and root_url != nested_url:
+            raise ManifestError("root.url conflicts with root_url")
+        root_page_id = root_page_id or nested_page_id
+        root_url = root_url or nested_url
+
+    if root_url is not None:
+        url_page_id = _page_id_from_url(root_url)
+        if url_page_id is None:
+            raise ManifestError("root.url must contain a Confluence page ID")
+        if root_page_id is not None and root_page_id != url_page_id:
+            raise ManifestError(f"root.url must contain root page_id {root_page_id}")
+        root_page_id = root_page_id or url_page_id
+
+    return root_page_id, root_url, _space_from_url(root_url) if root_url is not None else None
+
+
+def load_manifest(path: Path, *, allow_missing_page_ids: bool = False) -> ProjectManifest:
     if not path.exists():
         raise ManifestError(f"Manifest not found: {path}")
 
@@ -139,6 +194,7 @@ def load_manifest(path: Path) -> ProjectManifest:
     root = _as_mapping(raw, "manifest")
     defaults = _as_mapping(root.get("defaults", {}), "defaults")
     pages_raw = _as_mapping(root.get("pages"), "pages")
+    root_page_id, root_url, root_space = _root_metadata(root)
 
     output_format = defaults.get("output_format", "svg")
     if not isinstance(output_format, str) or output_format not in SUPPORTED_OUTPUT_FORMATS:
@@ -162,24 +218,31 @@ def load_manifest(path: Path) -> ProjectManifest:
             raise ManifestError(f"Duplicate page path {page_path}")
         page_data = _as_mapping(raw_page, f"pages.{page_path}")
         page_id = page_data.get("page_id")
-        if not isinstance(page_id, str) or not page_id:
+        if page_id is None and allow_missing_page_ids:
+            page_id = None
+        elif not isinstance(page_id, str) or not page_id:
             raise ManifestError(f"pages.{page_path}.page_id must be a non-empty string")
-        if page_id in seen_page_ids:
+        if page_id is not None and page_id in seen_page_ids:
             raise ManifestError(
                 f"Duplicate page_id {page_id} for {seen_page_ids[page_id]} and {page_path}"
             )
-        seen_page_ids[page_id] = page_path
+        if page_id is not None:
+            seen_page_ids[page_id] = page_path
 
         title = _optional_str(page_data.get("title"), f"pages.{page_path}.title")
         url = _optional_str(page_data.get("url"), f"pages.{page_path}.url")
-        if url is not None and not _url_contains_page_id_segment(url, page_id):
+        if (
+            page_id is not None
+            and url is not None
+            and not _url_contains_page_id_segment(url, page_id)
+        ):
             raise ManifestError(f"pages.{page_path}.url must contain page_id {page_id}")
 
         pages[page_path] = ManifestPage(path=page_path, page_id=page_id, title=title, url=url)
 
     return ProjectManifest(
         path=path,
-        space=_optional_str(root.get("space"), "space"),
+        space=_optional_str(root.get("space"), "space") or root_space,
         include=_as_string_list(root.get("include"), "include", DEFAULT_INCLUDE),
         exclude=_as_string_list(root.get("exclude"), "exclude", ()),
         version_comment=version_comment,
@@ -187,4 +250,27 @@ def load_manifest(path: Path) -> ProjectManifest:
         diagram_width=_positive_int(defaults.get("diagram_width"), "defaults.diagram_width", 1000),
         allow_diagram_fallback=fallback,
         pages=pages,
+        root_page_id=root_page_id,
+        root_url=root_url,
+    )
+
+
+def write_manifest_page_ids(path: Path, page_ids: dict[str, str]) -> None:
+    try:
+        raw = yaml.load(path.read_text(encoding="utf-8"), Loader=_UniqueKeySafeLoader)
+    except yaml.YAMLError as exc:
+        raise ManifestError(f"Invalid YAML in manifest {path}: {exc}") from exc
+
+    if raw is None:
+        raw = {}
+    root = _as_mapping(raw, "manifest")
+    pages = _as_mapping(root.get("pages"), "pages")
+    for page_path, page_id in page_ids.items():
+        normalized_path = _normalize_page_path(page_path)
+        page_data = _as_mapping(pages.get(normalized_path), f"pages.{normalized_path}")
+        page_data["page_id"] = page_id
+
+    path.write_text(
+        yaml.safe_dump(root, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
     )

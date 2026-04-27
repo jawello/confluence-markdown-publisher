@@ -14,10 +14,11 @@ Goal:
   `uv run publish-confluence --project <docs-root> --plan-only`
 - Keep Markdown files as the source of truth.
 - Use `.confluence-publish.yml` as the only place for Confluence page IDs.
-- Do not create Confluence pages automatically.
+- Do not create Confluence pages unless the request explicitly asks for first-time page creation with `--create-missing-pages`.
 
 Project structure rules:
 - Put a `.confluence-publish.yml` manifest at the documentation root.
+- For first-time creation, add `root.page_id` or `root.url` for the existing Confluence root page.
 - Use `index.md` as the page for each directory.
 - A nested document must have a nearest ancestor directory with an `index.md` entry in the manifest.
 - Store all manifest page keys as POSIX paths relative to the docs root, for example `index.md` or `guide/getting-started.md`.
@@ -25,8 +26,9 @@ Project structure rules:
 - Use `include` and `exclude` patterns to keep drafts, scratch files, and private notes out of publishing.
 
 Manifest rules:
-- Every discovered Markdown file must have a `pages` entry with `page_id`.
-- `page_id` is required and is the publishing source of truth.
+- Every discovered Markdown file must have a `pages` entry.
+- In normal mode, every page entry must have `page_id`.
+- In first-time create mode, page entries may omit `page_id`; the publisher creates them and writes the returned IDs back to the manifest.
 - `title` is optional; if omitted, the tool uses the first Markdown H1, then the file stem.
 - `url` is optional but recommended; when present, it must contain the exact Confluence page ID path segment.
 - Use `defaults.version_comment` for the standard Confluence version comment.
@@ -89,7 +91,7 @@ graph TD
 Validation workflow:
 1. Review the docs tree and list every publishable Markdown file.
 2. Create or update `.confluence-publish.yml`.
-3. Ensure every included Markdown file has a `page_id`.
+3. Ensure every included Markdown file has a `page_id`, unless this is an approved first-time run with `--create-missing-pages`.
 4. Ensure every manifest page exists on disk.
 5. Ensure nested pages have a parent `index.md` entry.
 6. Run:
@@ -97,11 +99,13 @@ Validation workflow:
 7. Fix any manifest or structure errors before publishing.
 8. For a dry-run storage preview, run:
    `uv run publish-confluence --project <docs-root> --dry-run`
+9. For explicit first-time page creation, run only after approval:
+   `uv run publish-confluence --project <docs-root> --create-missing-pages --yes`
 
 Output expected from you:
 - A short summary of files created or changed.
 - The final `.confluence-publish.yml` content or diff.
 - Any missing Confluence page IDs that must be filled by a human.
 - The exact validation command that was run and the result.
-- Do not publish live unless explicitly asked.
+- Do not publish live or create pages unless explicitly asked.
 `````

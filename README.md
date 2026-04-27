@@ -92,9 +92,36 @@ pages:
     url: "https://criteo.atlassian.net/wiki/pages/111111/Project+Documentation"
 ```
 
-Project mode never creates Confluence pages. Every discovered Markdown file must have a `page_id` in the manifest.
+Project mode does not create Confluence pages by default. Every discovered Markdown file must have a `page_id` in the manifest unless `--create-missing-pages` is used.
 
 For documentation authoring rules, use [docs/documentation-style.md](docs/documentation-style.md). For delegated preparation work, use [docs/documentation-agent-prompt.md](docs/documentation-agent-prompt.md).
+
+To create missing pages under an existing Confluence root page, add `root` metadata and use `--create-missing-pages`:
+
+```yaml
+space: "~6393203da593cb822e995262"
+
+root:
+  url: "https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/pages/999999/Documentation"
+
+include:
+  - "**/*.md"
+
+pages:
+  index.md:
+    title: "Project Documentation"
+  guide/index.md:
+    title: "Guide"
+```
+
+```bash
+uv run publish-confluence \
+  --project docs \
+  --create-missing-pages \
+  --yes
+```
+
+The tool creates pages without `page_id`, writes the new `page_id` values back to `.confluence-publish.yml`, then publishes the page content. Without `--create-missing-pages`, missing `page_id` values remain an error.
 
 Publish with a version comment:
 

@@ -5,6 +5,7 @@ import pytest
 
 from confluence_publisher import cli
 from confluence_publisher.cli import build_arg_parser, build_preview
+from confluence_publisher.manifest import load_manifest
 from confluence_publisher.models import PageInfo, RenderedDiagram
 
 
@@ -106,10 +107,26 @@ class FakeClient:
     def __init__(self, title: str = "Fetched Title") -> None:
         self.title = title
         self.calls = []
+        self.created = 0
 
     async def get_page(self, page_id: str) -> PageInfo:
         self.calls.append(("get_page", page_id))
         return PageInfo(page_id=page_id, title=self.title)
+
+    async def create_page(
+        self,
+        *,
+        space_key: str,
+        title: str,
+        parent_id: str,
+        storage: str,
+    ) -> PageInfo:
+        self.created += 1
+        page_id = str(700000 + self.created)
+        self.calls.append(
+            ("create_page", space_key, title, parent_id, "<p>" in storage, page_id)
+        )
+        return PageInfo(page_id=page_id, title=title)
 
     async def upload_attachment(self, page_id: str, file_path: Path) -> None:
         self.calls.append(("upload_attachment", page_id, file_path.name, file_path.exists()))
@@ -245,6 +262,93 @@ pages:
     assert client.calls == [
         ("update_page_storage", "111111", "Home", False, False, False, "CLI comment")
     ]
+
+
+@pytest.mark.asyncio
+async def test_run_async_project_create_missing_pages_updates_manifest_and_publishes(
+    tmp_path, monkeypatch
+):
+    (tmp_path / "guide").mkdir()
+    (tmp_path / "index.md").write_text("# Home\n", encoding="utf-8")
+    (tmp_path / "guide" / "index.md").write_text("# Guide\n", encoding="utf-8")
+    manifest_path = tmp_path / ".confluence-publish.yml"
+    manifest_path.write_text(
+        """
+root:
+  url: "https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/pages/999999/Docs"
+pages:
+  index.md:
+    title: "Home"
+  guide/index.md:
+    title: "Guide"
+""".strip(),
+        encoding="utf-8",
+    )
+    client = FakeClient()
+
+    monkeypatch.setattr(cli, "connect_mcp_atlassian", fake_connect_for(client))
+
+    result = await cli.run_async(["--project", str(tmp_path), "--create-missing-pages", "--yes"])
+
+    assert result == 0
+    assert client.calls == [
+        ("create_page", "~6393203da593cb822e995262", "Home", "999999", True, "700001"),
+        ("create_page", "~6393203da593cb822e995262", "Guide", "700001", True, "700002"),
+        (
+            "update_page_storage",
+            "700001",
+            "Home",
+            False,
+            False,
+            False,
+            "Sync documentation from Markdown",
+        ),
+        (
+            "update_page_storage",
+            "700002",
+            "Guide",
+            False,
+            False,
+            False,
+            "Sync documentation from Markdown",
+        ),
+    ]
+    updated_manifest = load_manifest(manifest_path)
+    assert updated_manifest.pages["index.md"].page_id == "700001"
+    assert updated_manifest.pages["guide/index.md"].page_id == "700002"
+
+
+@pytest.mark.asyncio
+async def test_run_async_project_plan_only_create_missing_pages_does_not_connect(
+    tmp_path, monkeypatch, capsys
+):
+    (tmp_path / "index.md").write_text("# Home\n", encoding="utf-8")
+    (tmp_path / ".confluence-publish.yml").write_text(
+        """
+root:
+  page_id: "999999"
+space: "~6393203da593cb822e995262"
+pages:
+  index.md:
+    title: "Home"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    def fail_connect():
+        raise AssertionError("plan-only must not connect to MCP")
+
+    monkeypatch.setattr(cli, "connect_mcp_atlassian", fail_connect)
+
+    result = await cli.run_async(
+        ["--project", str(tmp_path), "--create-missing-pages", "--plan-only"]
+    )
+
+    assert result == 0
+    output = capsys.readouterr().out
+    assert "Root page: 999999" in output
+    assert "Creates: 1" in output
+    assert "index.md -> <missing>" in output
 
 
 @pytest.mark.asyncio

@@ -86,6 +86,60 @@ def test_build_publish_plan_errors_for_discovered_file_missing_from_manifest(tmp
         )
 
 
+def test_build_publish_plan_allows_missing_page_ids_with_create_mode(tmp_path):
+    (tmp_path / "guide").mkdir()
+    (tmp_path / "index.md").write_text("# Home\n", encoding="utf-8")
+    (tmp_path / "guide" / "index.md").write_text("# Guide\n", encoding="utf-8")
+    project_manifest = manifest(
+        tmp_path,
+        {
+            "index.md": page("index.md", None),
+            "guide/index.md": page("guide/index.md", None),
+        },
+    )
+    project_manifest = ProjectManifest(
+        **{
+            **project_manifest.__dict__,
+            "root_page_id": "999999",
+        }
+    )
+
+    plan = build_publish_plan(
+        project_root=tmp_path,
+        manifest=project_manifest,
+        discovered_paths=("guide/index.md", "index.md"),
+        excluded_count=0,
+        version_comment=None,
+        output_format=None,
+        diagram_width=None,
+        allow_diagram_fallback=None,
+        create_missing_pages=True,
+    )
+
+    assert plan.create_missing_pages is True
+    assert plan.root_page_id == "999999"
+    assert [item.page_id for item in plan.items] == [None, None]
+    assert plan.items[1].parent_source_path == "index.md"
+
+
+def test_build_publish_plan_rejects_create_mode_without_root_page(tmp_path):
+    (tmp_path / "index.md").write_text("# Home\n", encoding="utf-8")
+    project_manifest = manifest(tmp_path, {"index.md": page("index.md", None)})
+
+    with pytest.raises(PlannerError, match="root page"):
+        build_publish_plan(
+            project_root=tmp_path,
+            manifest=project_manifest,
+            discovered_paths=("index.md",),
+            excluded_count=0,
+            version_comment=None,
+            output_format=None,
+            diagram_width=None,
+            allow_diagram_fallback=None,
+            create_missing_pages=True,
+        )
+
+
 def test_build_publish_plan_errors_for_manifest_file_missing_on_disk(tmp_path):
     project_manifest = manifest(tmp_path, {"index.md": page("index.md", "111111")})
 

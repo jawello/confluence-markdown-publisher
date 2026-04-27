@@ -28,7 +28,7 @@ This keeps Markdown as the source of truth and avoids depending on manual Gliffy
 
 - This tool is not a full Markdown-to-Confluence implementation.
 - It does not try to render Mermaid inside Confluence.
-- It does not create Confluence pages.
+- By default it does not create Confluence pages. Missing-page creation is available only through an explicit project-mode flag.
 - It does not move, reorder, or repair Confluence page tree relationships.
 - It does not provide a hosted service, daemon, or scheduler.
 - It does not store rendered diagrams permanently in the repository.
@@ -136,7 +136,9 @@ Project mode flow:
 14. Live project publishing asks for confirmation unless `--yes` is passed.
 15. `batch.publish_project()` publishes each planned page through the same single-page rendering and update pipeline.
 
-Project mode never creates Confluence pages. Missing `page_id` mappings are planning errors that stop the run before rendering or MCP startup.
+Project mode does not create Confluence pages by default. Missing `page_id` mappings are planning errors that stop the run before rendering or MCP startup.
+
+When `--create-missing-pages` is enabled, the manifest must provide a root Confluence page through `root.page_id`, `root.url`, `root_page_id`, or `root_url`. The planner allows manifest pages without `page_id`, orders parents before children, and records the root page as the parent for top-level pages. Live publishing creates missing pages through `confluence_create_page`, writes the returned `page_id` values back to `.confluence-publish.yml`, then publishes page content through the existing update pipeline. `--plan-only` reports the pages that would be created without connecting to MCP, and `--dry-run` previews storage without creating pages.
 
 ## Mermaid Handling
 
@@ -230,7 +232,8 @@ The default behavior is fail-fast:
 - Missing rendered output or an empty output file stops publishing.
 - Invalid Mermaid width directives stop conversion.
 - Invalid project manifests and unsafe include or exclude patterns stop project publishing before side effects.
-- Missing project `page_id` mappings stop project publishing before rendering or MCP startup.
+- Missing project `page_id` mappings stop normal project publishing before rendering or MCP startup.
+- In explicit create mode, missing `page_id` mappings are created under the configured root page and persisted to the manifest before content updates.
 - Missing Confluence environment variables stop live publishing before MCP startup.
 - MCP tool errors are converted into Python exceptions with bounded error messages.
 
@@ -253,7 +256,8 @@ Safety controls:
 - Live publishing requires an interactive `yes` confirmation unless `--yes` is passed.
 - Attachment names are listed in the preview before publishing.
 - The first part of generated storage is printed before publishing.
-- Project mode fails before side effects when discovered Markdown files are missing manifest `page_id` mappings.
+- Normal project mode fails before side effects when discovered Markdown files are missing manifest `page_id` mappings.
+- Create mode has an explicit side effect boundary: no page creation during `--plan-only` or `--dry-run`; live publishing asks for confirmation unless `--yes` is passed.
 - Project discovery rejects unsafe include and exclude patterns and skips symlinked Markdown paths.
 - Confluence credentials stay in environment variables.
 - Rendered diagrams are written only to a temporary directory and removed when the process exits.

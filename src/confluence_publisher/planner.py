@@ -15,7 +15,7 @@ class PlannerError(ValueError):
 class PlannedPage:
     source_path: str
     absolute_path: Path
-    page_id: str
+    page_id: str | None
     title: str
     url: str | None
     parent_source_path: str | None
@@ -31,6 +31,9 @@ class PublishPlan:
     allow_diagram_fallback: bool
     excluded_count: int
     items: tuple[PlannedPage, ...]
+    space: str | None = None
+    root_page_id: str | None = None
+    create_missing_pages: bool = False
 
 
 _H1_RE = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
@@ -82,6 +85,7 @@ def build_publish_plan(
     output_format: str | None,
     diagram_width: int | None,
     allow_diagram_fallback: bool | None,
+    create_missing_pages: bool = False,
 ) -> PublishPlan:
     discovered = set(discovered_paths)
     manifest_paths = set(manifest.pages)
@@ -103,6 +107,23 @@ def build_publish_plan(
             "Cannot publish project: pages are listed in manifest but missing on disk: "
             f"{entries}"
         )
+
+    missing_page_ids = sorted(
+        source_path
+        for source_path in discovered
+        if manifest.pages[source_path].page_id is None
+    )
+    if missing_page_ids and not create_missing_pages:
+        entries = ", ".join(missing_page_ids)
+        raise PlannerError(
+            "Cannot publish project: pages are missing page_id values: "
+            f"{entries}"
+        )
+    if missing_page_ids and create_missing_pages:
+        if not manifest.root_page_id:
+            raise PlannerError("Cannot create missing pages without a root page")
+        if not manifest.space:
+            raise PlannerError("Cannot create missing pages without a Confluence space")
 
     items: list[PlannedPage] = []
     for source_path in sorted(discovered_paths, key=_sort_key):
@@ -140,6 +161,9 @@ def build_publish_plan(
             if allow_diagram_fallback is None
             else allow_diagram_fallback
         ),
+        space=manifest.space,
+        root_page_id=manifest.root_page_id,
+        create_missing_pages=create_missing_pages,
         excluded_count=excluded_count,
         items=tuple(items),
     )

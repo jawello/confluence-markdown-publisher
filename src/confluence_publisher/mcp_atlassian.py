@@ -15,6 +15,7 @@ from .models import PageInfo
 REQUIRED_TOOLS = (
     "confluence_get_page",
     "confluence_get_attachments",
+    "confluence_create_page",
     "confluence_upload_attachment",
     "confluence_update_page",
 )
@@ -122,6 +123,38 @@ class McpAtlassianClient:
         if not isinstance(title, str) or not title:
             raise McpToolError(f"confluence_get_page returned no title for page {page_id}")
         return PageInfo(page_id=str(payload.get("id", page_id)), title=title)
+
+    async def create_page(
+        self,
+        *,
+        space_key: str,
+        title: str,
+        parent_id: str,
+        storage: str,
+    ) -> PageInfo:
+        result = await self.session.call_tool(
+            "confluence_create_page",
+            {
+                "space_key": space_key,
+                "title": title,
+                "content": storage,
+                "parent_id": parent_id,
+                "content_format": "storage",
+                "include_content": False,
+            },
+        )
+        payload = _structured_content(result)
+        page_payload = payload.get("page", payload)
+        if not isinstance(page_payload, dict):
+            raise McpToolError("confluence_create_page returned no page object")
+        page_id = page_payload.get("id")
+        if not isinstance(page_id, str) or not page_id:
+            raise McpToolError("confluence_create_page returned no page id")
+        page_title = page_payload.get("title")
+        return PageInfo(
+            page_id=page_id,
+            title=page_title if isinstance(page_title, str) and page_title else title,
+        )
 
     async def upload_attachment(self, page_id: str, file_path: Path) -> None:
         result = await self.session.call_tool(
