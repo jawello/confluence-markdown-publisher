@@ -456,7 +456,7 @@ pages:
 
 
 @pytest.mark.asyncio
-async def test_run_async_project_live_sync_missing_page_id_fails_before_mcp(
+async def test_run_async_project_live_sync_missing_page_id_routes_to_sync(
     tmp_path, monkeypatch
 ):
     (tmp_path / "index.md").write_text("# Home\n", encoding="utf-8")
@@ -468,18 +468,30 @@ pages:
 """.strip(),
         encoding="utf-8",
     )
+    calls = []
 
-    def fail_connect():
-        raise AssertionError("sync live mode must fail before MCP")
+    async def fake_sync_project(plan, *, client, dry_run, mmdc_bin):
+        calls.append(("sync_project", plan.sync_enabled, dry_run, mmdc_bin))
+        return 0
 
-    monkeypatch.setattr(cli, "connect_mcp_atlassian", fail_connect)
+    async def fail_publish_project(*_args, **_kwargs):
+        raise AssertionError("sync plans must not use legacy publish_project")
 
-    with pytest.raises(SystemExit, match="Sync publishing is not implemented yet"):
-        await cli.run_async(["--project", str(tmp_path), "--sync", "--yes"])
+    from confluence_publisher import batch, sync
+
+    client = FakeClient()
+    monkeypatch.setattr(cli, "connect_mcp_atlassian", fake_connect_for(client))
+    monkeypatch.setattr(sync, "sync_project", fake_sync_project)
+    monkeypatch.setattr(batch, "publish_project", fail_publish_project)
+
+    result = await cli.run_async(["--project", str(tmp_path), "--sync", "--yes"])
+
+    assert result == 0
+    assert calls == [("sync_project", True, False, "mmdc")]
 
 
 @pytest.mark.asyncio
-async def test_run_async_project_live_manifest_sync_missing_page_id_fails_before_mcp(
+async def test_run_async_project_live_manifest_sync_missing_page_id_routes_to_sync(
     tmp_path, monkeypatch
 ):
     (tmp_path / "index.md").write_text("# Home\n", encoding="utf-8")
@@ -493,14 +505,89 @@ pages:
 """.strip(),
         encoding="utf-8",
     )
+    calls = []
+
+    async def fake_sync_project(plan, *, client, dry_run, mmdc_bin):
+        calls.append(("sync_project", plan.sync_enabled, dry_run, mmdc_bin))
+        return 0
+
+    async def fail_publish_project(*_args, **_kwargs):
+        raise AssertionError("sync plans must not use legacy publish_project")
+
+    from confluence_publisher import batch, sync
+
+    client = FakeClient()
+    monkeypatch.setattr(cli, "connect_mcp_atlassian", fake_connect_for(client))
+    monkeypatch.setattr(sync, "sync_project", fake_sync_project)
+    monkeypatch.setattr(batch, "publish_project", fail_publish_project)
+
+    result = await cli.run_async(["--project", str(tmp_path), "--yes"])
+
+    assert result == 0
+    assert calls == [("sync_project", True, False, "mmdc")]
+
+
+@pytest.mark.asyncio
+async def test_run_async_project_manifest_sync_enabled_uses_sync_without_flag(
+    tmp_path, monkeypatch
+):
+    (tmp_path / "index.md").write_text("# Home\n\nPlain text.\n", encoding="utf-8")
+    manifest_path = tmp_path / ".confluence-publish.yml"
+    manifest_path.write_text(
+        """
+space: "~6393203da593cb822e995262"
+sync:
+  enabled: true
+root:
+  page_id: "111111"
+pages:
+  index.md:
+    page_id: "111111"
+    title: "Home"
+    content_hash: "sha256:old"
+""".strip(),
+        encoding="utf-8",
+    )
+    client = FakeClient()
+    monkeypatch.setattr(cli, "connect_mcp_atlassian", fake_connect_for(client))
+
+    result = await cli.run_async(["--project", str(tmp_path), "--yes"])
+
+    assert result == 0
+    assert client.calls[0] == ("get_page", "111111")
+
+
+@pytest.mark.asyncio
+async def test_run_async_project_sync_dry_run_uses_sync_without_connecting(
+    tmp_path, monkeypatch, capsys
+):
+    (tmp_path / "index.md").write_text("# Home\n\nPlain text.\n", encoding="utf-8")
+    (tmp_path / ".confluence-publish.yml").write_text(
+        """
+space: "~6393203da593cb822e995262"
+sync:
+  enabled: true
+root:
+  page_id: "111111"
+pages:
+  index.md:
+    page_id: "111111"
+    title: "Home"
+""".strip(),
+        encoding="utf-8",
+    )
 
     def fail_connect():
-        raise AssertionError("sync live mode must fail before MCP")
+        raise AssertionError("sync dry-run must not connect to MCP")
 
     monkeypatch.setattr(cli, "connect_mcp_atlassian", fail_connect)
 
-    with pytest.raises(SystemExit, match="Sync publishing is not implemented yet"):
-        await cli.run_async(["--project", str(tmp_path), "--yes"])
+    result = await cli.run_async(["--project", str(tmp_path), "--dry-run"])
+
+    assert result == 0
+    output = capsys.readouterr().out
+    assert "Sync: enabled" in output
+    assert "Storage preview for index.md" in output
 
 
 @pytest.mark.asyncio

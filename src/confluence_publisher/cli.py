@@ -225,6 +225,7 @@ async def publish_single_page(
 
 async def run_project_mode(args: argparse.Namespace) -> int:
     from .batch import format_publish_plan, publish_project
+    from .sync import sync_project
 
     manifest_path = args.manifest or args.project / ".confluence-publish.yml"
     try:
@@ -282,15 +283,19 @@ async def run_project_mode(args: argparse.Namespace) -> int:
             async def update_page_storage(self, page_id, title, storage, version_comment):
                 raise AssertionError("dry-run must not update pages")
 
+        if plan.sync_enabled:
+            return await sync_project(
+                plan,
+                client=DryRunClient(),
+                dry_run=True,
+                mmdc_bin=args.mmdc_bin,
+            )
         return await publish_project(
             plan,
             client=DryRunClient(),
             dry_run=True,
             mmdc_bin=args.mmdc_bin,
         )
-
-    if plan.sync_enabled:
-        raise SystemExit("Sync publishing is not implemented yet")
 
     if not args.yes:
         answer = input("Publish project to Confluence? Type 'yes' to continue: ")
@@ -299,6 +304,13 @@ async def run_project_mode(args: argparse.Namespace) -> int:
             return 1
 
     async with connect_mcp_atlassian() as client:
+        if plan.sync_enabled:
+            return await sync_project(
+                plan,
+                client=client,
+                dry_run=False,
+                mmdc_bin=args.mmdc_bin,
+            )
         return await publish_project(
             plan,
             client=client,
