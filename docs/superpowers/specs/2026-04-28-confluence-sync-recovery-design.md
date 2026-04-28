@@ -46,6 +46,10 @@ metadata and per-page sync metadata:
 
 ```yaml
 space: "~6393203da593cb822e995262"
+sync:
+  enabled: true
+  recreate_missing_root: true
+  recreate_stale_pages: true
 root:
   parent_page_id: "2163738446"
   page_id: "5155097071"
@@ -62,6 +66,19 @@ pages:
 `root.parent_page_id` is the stable parent used when the project root must be
 recreated. `root.page_id` and `root.url` describe the current project root and
 may be replaced by sync recovery.
+
+The optional `sync` block stores project-level defaults for the sync command:
+
+- `sync.enabled`: run project publishing through the sync state machine by
+  default.
+- `sync.recreate_missing_root`: allow full project recreation when the configured
+  root is missing or deleted.
+- `sync.recreate_stale_pages`: allow recreation of individual pages whose
+  `page_id` is missing, deleted, or unreadable.
+
+All three values default to `false` when omitted. Keeping the recovery policy in
+the manifest makes documentation projects self-contained; command-line flags
+remain available for one-off overrides.
 
 For backward compatibility, current `root.url`, `root_page_id`, and `root_url`
 loading behavior remains valid. Automatic root recreation requires a configured
@@ -82,6 +99,21 @@ Add explicit recovery policy flags:
 --recreate-stale-pages
 ```
 
+The same policies can be enabled in `.confluence-publish.yml`:
+
+```yaml
+sync:
+  enabled: true
+  recreate_missing_root: true
+  recreate_stale_pages: true
+```
+
+Effective sync settings are the union of manifest settings and CLI flags. For
+example, either `sync.enabled: true` or `--sync` enables sync mode. Either
+`sync.recreate_missing_root: true` or `--recreate-missing-root` enables root
+recreation. Live writes still require `--yes`; manifest settings never bypass
+the confirmation gate.
+
 Default `--sync` behavior is conservative:
 
 - it checks Confluence state;
@@ -97,9 +129,15 @@ The Whitelabel recovery command becomes:
 ```bash
 publish-confluence \
   --project /home/akhadiev/Documents/iow/devops/gitlab.iponweb.net/infrastructure/iowops/projects/NEXT_Documenttaion/Whitelabel_NEXT_Deployment/en \
-  --sync \
-  --recreate-missing-root \
   --yes
+```
+
+That command is sufficient when the Whitelabel manifest contains:
+
+```yaml
+sync:
+  enabled: true
+  recreate_missing_root: true
 ```
 
 ## Sync State Machine
@@ -170,6 +208,9 @@ The sync command must fail before writes for these cases:
 Errors should identify the affected source path, current page ID, intended title,
 and recommended flag or manifest change.
 
+Plan output should display the effective sync settings so a user can see when a
+project config enables root or page recreation without scanning YAML manually.
+
 ## Testing
 
 Unit and integration-style tests should cover:
@@ -181,6 +222,8 @@ Unit and integration-style tests should cover:
 - page ID is stale with `--recreate-stale-pages`: recreate that page;
 - root page ID is stale without `--recreate-missing-root`: fail before writes;
 - root page ID is stale with `--recreate-missing-root`: recreate root and full tree;
+- manifest `sync.enabled` enables sync mode without the `--sync` flag;
+- manifest recovery settings enable the same behavior as matching CLI flags;
 - title collision still blocks before create operations;
 - manifest writes preserve existing user-authored fields where possible.
 
