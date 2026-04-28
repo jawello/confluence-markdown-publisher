@@ -6,11 +6,15 @@ import re
 import shutil
 import tempfile
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
+from urllib.parse import quote
 
 from .cli import _prepare_single_page
-from .models import RenderedDiagram
+from .manifest import ManifestPageSyncState, write_manifest_sync_state
+from .mcp_atlassian import McpToolError
+from .models import PageInfo, RenderedDiagram
 from .planner import PlannedPage, PublishPlan
 
 
@@ -125,3 +129,168 @@ def prepare_sync_pages(plan: PublishPlan, *, mmdc_bin: str) -> dict[str, Prepare
                 content_hash=content_hash,
             )
     return prepared_pages
+
+
+def _root_item(plan: PublishPlan) -> PlannedPage:
+    if plan.root_page_id is not None:
+        for item in plan.items:
+            if item.page_id == plan.root_page_id:
+                return item
+    if plan.root_url is not None:
+        for item in plan.items:
+            if item.url == plan.root_url:
+                return item
+    if not plan.items:
+        raise RuntimeError("Cannot sync project without pages")
+    return plan.items[0]
+
+
+def _now_iso() -> str:
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _fallback_page_url(*, space_key: str | None, page_id: str, title: str) -> str | None:
+    if space_key is None:
+        return None
+    encoded_space = quote(space_key, safe="~")
+    encoded_title = quote(title.replace(" ", "+"), safe="+")
+    return f"/spaces/{encoded_space}/pages/{page_id}/{encoded_title}"
+
+
+async def _readable_page_ids(
+    plan: PublishPlan,
+    *,
+    client,
+    checked: dict[str, bool] | None = None,
+) -> dict[str, bool]:
+    readable = dict(checked or {})
+    for item in plan.items:
+        if item.page_id is None or item.page_id in readable:
+            continue
+        try:
+            await client.get_page(item.page_id)
+        except McpToolError:
+            readable[item.page_id] = False
+        else:
+            readable[item.page_id] = True
+    return readable
+
+
+async def sync_project(plan: PublishPlan, *, client, dry_run: bool, mmdc_bin: str) -> int:
+    if not plan.sync_enabled:
+        raise RuntimeError("sync_project requires a sync-enabled plan")
+    if plan.space is None:
+        raise RuntimeError("Cannot sync project without a Confluence space")
+
+    root = _root_item(plan)
+    checked: dict[str, bool] = {}
+    if root.page_id is not None:
+        try:
+            await client.get_page(root.page_id)
+        except McpToolError as exc:
+            if not plan.recreate_missing_root:
+                raise RuntimeError(
+                    f"Cannot sync project because root page {root.page_id} for "
+                    f"{root.source_path} is not readable. Enable --recreate-missing-root "
+                    "or set sync.recreate_missing_root: true."
+                ) from exc
+            if plan.root_parent_page_id is None:
+                raise RuntimeError(
+                    "Cannot recreate missing root without root.parent_page_id in manifest"
+                ) from exc
+            try:
+                await client.get_page(plan.root_parent_page_id)
+            except McpToolError as parent_exc:
+                raise RuntimeError(
+                    f"Cannot recreate missing root because root.parent_page_id "
+                    f"{plan.root_parent_page_id} is not readable: {parent_exc}"
+                ) from parent_exc
+            return await _recreate_full_tree(
+                plan,
+                client=client,
+                dry_run=dry_run,
+                mmdc_bin=mmdc_bin,
+            )
+        else:
+            checked[root.page_id] = True
+
+    readable = await _readable_page_ids(plan, client=client, checked=checked)
+    stale_pages = [
+        item
+        for item in plan.items
+        if item.page_id is not None and readable.get(item.page_id) is False
+    ]
+    if stale_pages and not plan.recreate_stale_pages:
+        details = ", ".join(f"{item.source_path} ({item.page_id})" for item in stale_pages)
+        raise RuntimeError(
+            "Cannot sync project because existing page IDs are not readable: "
+            f"{details}. Enable --recreate-stale-pages or set sync.recreate_stale_pages: true."
+        )
+    if stale_pages:
+        return await _recreate_stale_pages(
+            plan,
+            stale_pages=stale_pages,
+            client=client,
+            dry_run=dry_run,
+            mmdc_bin=mmdc_bin,
+        )
+
+    missing_pages = [item for item in plan.items if item.page_id is None]
+    if missing_pages:
+        details = ", ".join(item.source_path for item in missing_pages)
+        raise RuntimeError(
+            "Cannot sync project because pages are missing page_id values: "
+            f"{details}. Page creation requires the page recovery task or create-missing support."
+        )
+
+    prepared_pages = prepare_sync_pages(plan, mmdc_bin=mmdc_bin)
+    return await _publish_prepared_sync_pages(
+        plan,
+        prepared_pages=prepared_pages,
+        client=client,
+        dry_run=dry_run,
+        page_ids={item.source_path: item.page_id for item in plan.items if item.page_id},
+    )
+
+
+async def _recreate_full_tree(plan: PublishPlan, *, client, dry_run: bool, mmdc_bin: str) -> int:
+    raise RuntimeError("Full tree recreation requires the root recovery task")
+
+
+async def _recreate_stale_pages(
+    plan: PublishPlan,
+    *,
+    stale_pages: list[PlannedPage],
+    client,
+    dry_run: bool,
+    mmdc_bin: str,
+) -> int:
+    raise RuntimeError("Stale page recreation requires the page recovery task")
+
+
+async def _publish_prepared_sync_pages(
+    plan: PublishPlan,
+    *,
+    prepared_pages: dict[str, PreparedSyncPage],
+    client,
+    dry_run: bool,
+    page_ids: dict[str, str],
+) -> int:
+    for source_path, prepared in prepared_pages.items():
+        page_id = page_ids.get(source_path)
+        if page_id is None:
+            continue
+        if dry_run:
+            print()
+            print(f"Storage preview for {source_path}:")
+            print(prepared.storage[:1200])
+            continue
+        for rendered in prepared.rendered_diagrams:
+            await client.upload_attachment(page_id, rendered.output_path)
+        await client.update_page_storage(
+            page_id,
+            prepared.item.title,
+            prepared.storage,
+            version_comment=plan.version_comment,
+        )
+    return 0
