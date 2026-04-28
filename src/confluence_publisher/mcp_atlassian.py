@@ -149,6 +149,14 @@ def _page_infos(payload: object, tool_name: str) -> list[PageInfo]:
     return pages
 
 
+def _page_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    for key in ("page", "metadata"):
+        nested = payload.get(key)
+        if isinstance(nested, dict):
+            return nested
+    return payload
+
+
 def _raise_payload_error(payload: dict[str, Any], tool_name: str) -> None:
     error = payload.get("error")
     if isinstance(error, str) and error:
@@ -180,13 +188,14 @@ class McpAtlassianClient:
         )
         payload = _structured_content(result)
         _raise_payload_error(payload, "confluence_get_page")
-        title = payload.get("title")
+        page_payload = _page_payload(payload)
+        title = page_payload.get("title")
         if not isinstance(title, str) or not title:
             raise McpToolError(f"confluence_get_page returned no title for page {page_id}")
         return PageInfo(
-            page_id=str(payload.get("id", page_id)),
+            page_id=str(page_payload.get("id", page_id)),
             title=title,
-            url=_page_url(payload),
+            url=_page_url(page_payload) or _page_url(payload),
         )
 
     async def create_page(
@@ -209,7 +218,7 @@ class McpAtlassianClient:
             },
         )
         payload = _structured_content(result)
-        page_payload = payload.get("page", payload)
+        page_payload = _page_payload(payload)
         if not isinstance(page_payload, dict):
             raise McpToolError("confluence_create_page returned no page object")
         page_id = page_payload.get("id")

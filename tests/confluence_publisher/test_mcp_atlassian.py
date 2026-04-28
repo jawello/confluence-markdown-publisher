@@ -188,6 +188,60 @@ async def test_client_get_page_reads_url_from_url_payload():
 
 
 @pytest.mark.asyncio
+async def test_client_get_page_parses_fastmcp_metadata_wrapper():
+    result = CallToolResult(
+        content=[],
+        structuredContent={
+            "result": (
+                '{"metadata": {'
+                '"id": "2163738446", '
+                '"title": "Overview", '
+                '"type": "page", '
+                '"url": "https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/pages/2163738446"'
+                "}}"
+            )
+        },
+    )
+    session = FakeMcpSession(page_result=result)
+    client = McpAtlassianClient(session)
+
+    page = await client.get_page("2163738446")
+
+    assert page.page_id == "2163738446"
+    assert page.title == "Overview"
+    assert page.url == (
+        "https://criteo.atlassian.net/wiki/spaces/"
+        "~6393203da593cb822e995262/pages/2163738446"
+    )
+
+
+@pytest.mark.asyncio
+async def test_client_get_page_parses_metadata_wrapper_from_json_text_content():
+    result = CallToolResult(
+        content=[
+            TextContent(
+                type="text",
+                text=(
+                    '{"metadata": {'
+                    '"id": "2163738446", '
+                    '"title": "Overview", '
+                    '"url": "https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/overview"'
+                    "}}"
+                ),
+            )
+        ],
+    )
+    session = FakeMcpSession(page_result=result)
+    client = McpAtlassianClient(session)
+
+    page = await client.get_page("2163738446")
+
+    assert page.page_id == "2163738446"
+    assert page.title == "Overview"
+    assert page.url == "https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/overview"
+
+
+@pytest.mark.asyncio
 async def test_client_get_page_rejects_missing_title():
     session = FakeMcpSession(page_result={"structuredContent": {"id": "5151854234"}})
     client = McpAtlassianClient(session)
@@ -211,6 +265,24 @@ async def test_client_get_page_raises_mcp_json_error_message():
 
     with pytest.raises(McpToolError, match="no access"):
         await client.get_page("5155097071")
+
+
+@pytest.mark.asyncio
+async def test_client_get_page_raises_fastmcp_wrapped_json_error_message():
+    result = CallToolResult(
+        content=[],
+        structuredContent={
+            "result": (
+                '{"error": "Failed to retrieve page by ID '
+                "'5155096957': Error retrieving page content: no access\"}"
+            )
+        },
+    )
+    session = FakeMcpSession(page_result=result)
+    client = McpAtlassianClient(session)
+
+    with pytest.raises(McpToolError, match="no access"):
+        await client.get_page("5155096957")
 
 
 @pytest.mark.asyncio
