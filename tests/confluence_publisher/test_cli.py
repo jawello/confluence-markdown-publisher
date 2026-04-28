@@ -43,6 +43,22 @@ def test_arg_parser_accepts_project_mode():
     assert args.manifest is None
 
 
+def test_arg_parser_accepts_sync_flags():
+    args = build_arg_parser().parse_args(
+        [
+            "--project",
+            "docs",
+            "--sync",
+            "--recreate-missing-root",
+            "--recreate-stale-pages",
+        ]
+    )
+
+    assert args.sync is True
+    assert args.recreate_missing_root is True
+    assert args.recreate_stale_pages is True
+
+
 def test_validate_args_rejects_source_and_project_together():
     args = build_arg_parser().parse_args(
         ["--source", "page.md", "--page-id", "111111", "--project", "docs"]
@@ -63,6 +79,23 @@ def test_validate_args_rejects_page_id_in_project_mode():
     args = build_arg_parser().parse_args(["--project", "docs", "--page-id", "111111"])
 
     with pytest.raises(SystemExit):
+        cli.validate_args(args)
+
+
+@pytest.mark.parametrize(
+    ("flag", "expected"),
+    [
+        ("--sync", "--sync"),
+        ("--recreate-missing-root", "--recreate-missing-root"),
+        ("--recreate-stale-pages", "--recreate-stale-pages"),
+    ],
+)
+def test_validate_args_rejects_sync_flags_in_source_mode(flag, expected):
+    args = build_arg_parser().parse_args(
+        ["--source", "page.md", "--page-id", "111111", flag]
+    )
+
+    with pytest.raises(SystemExit, match=expected):
         cli.validate_args(args)
 
 
@@ -356,6 +389,118 @@ pages:
     assert "Root page: 999999" in output
     assert "Creates: 1" in output
     assert "index.md -> <missing>" in output
+
+
+@pytest.mark.asyncio
+async def test_run_async_project_plan_only_shows_effective_sync_settings(
+    tmp_path, monkeypatch, capsys
+):
+    (tmp_path / "index.md").write_text("# Home\n", encoding="utf-8")
+    (tmp_path / ".confluence-publish.yml").write_text(
+        """
+sync:
+  enabled: true
+  recreate_missing_root: true
+pages:
+  index.md:
+    page_id: "111111"
+    title: "Home"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    def fail_connect():
+        raise AssertionError("plan-only must not connect to MCP")
+
+    monkeypatch.setattr(cli, "connect_mcp_atlassian", fail_connect)
+
+    result = await cli.run_async(
+        ["--project", str(tmp_path), "--plan-only", "--recreate-stale-pages"]
+    )
+
+    assert result == 0
+    output = capsys.readouterr().out
+    assert "Sync: enabled" in output
+    assert "Recreate missing root: yes" in output
+    assert "Recreate stale pages: yes" in output
+
+
+@pytest.mark.asyncio
+async def test_run_async_project_plan_only_recreate_flag_enables_sync(
+    tmp_path, monkeypatch, capsys
+):
+    (tmp_path / "index.md").write_text("# Home\n", encoding="utf-8")
+    (tmp_path / ".confluence-publish.yml").write_text(
+        """
+pages:
+  index.md:
+    page_id: "111111"
+    title: "Home"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    def fail_connect():
+        raise AssertionError("plan-only must not connect to MCP")
+
+    monkeypatch.setattr(cli, "connect_mcp_atlassian", fail_connect)
+
+    result = await cli.run_async(
+        ["--project", str(tmp_path), "--plan-only", "--recreate-missing-root"]
+    )
+
+    assert result == 0
+    output = capsys.readouterr().out
+    assert "Sync: enabled" in output
+    assert "Recreate missing root: yes" in output
+
+
+@pytest.mark.asyncio
+async def test_run_async_project_live_sync_missing_page_id_fails_before_mcp(
+    tmp_path, monkeypatch
+):
+    (tmp_path / "index.md").write_text("# Home\n", encoding="utf-8")
+    (tmp_path / ".confluence-publish.yml").write_text(
+        """
+pages:
+  index.md:
+    title: "Home"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    def fail_connect():
+        raise AssertionError("sync live mode must fail before MCP")
+
+    monkeypatch.setattr(cli, "connect_mcp_atlassian", fail_connect)
+
+    with pytest.raises(SystemExit, match="Sync publishing is not implemented yet"):
+        await cli.run_async(["--project", str(tmp_path), "--sync", "--yes"])
+
+
+@pytest.mark.asyncio
+async def test_run_async_project_live_manifest_sync_missing_page_id_fails_before_mcp(
+    tmp_path, monkeypatch
+):
+    (tmp_path / "index.md").write_text("# Home\n", encoding="utf-8")
+    (tmp_path / ".confluence-publish.yml").write_text(
+        """
+sync:
+  enabled: true
+pages:
+  index.md:
+    title: "Home"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    def fail_connect():
+        raise AssertionError("sync live mode must fail before MCP")
+
+    monkeypatch.setattr(cli, "connect_mcp_atlassian", fail_connect)
+
+    with pytest.raises(SystemExit, match="Sync publishing is not implemented yet"):
+        await cli.run_async(["--project", str(tmp_path), "--yes"])
 
 
 @pytest.mark.asyncio

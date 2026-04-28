@@ -19,6 +19,8 @@ class PlannedPage:
     title: str
     url: str | None
     parent_source_path: str | None
+    content_hash: str | None = None
+    last_synced_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -33,7 +35,13 @@ class PublishPlan:
     items: tuple[PlannedPage, ...]
     space: str | None = None
     root_page_id: str | None = None
+    root_url: str | None = None
+    root_parent_page_id: str | None = None
+    root_parent_url: str | None = None
     create_missing_pages: bool = False
+    sync_enabled: bool = False
+    recreate_missing_root: bool = False
+    recreate_stale_pages: bool = False
 
 
 _H1_RE = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
@@ -86,6 +94,9 @@ def build_publish_plan(
     diagram_width: int | None,
     allow_diagram_fallback: bool | None,
     create_missing_pages: bool = False,
+    sync_enabled: bool = False,
+    recreate_missing_root: bool = False,
+    recreate_stale_pages: bool = False,
 ) -> PublishPlan:
     discovered = set(discovered_paths)
     manifest_paths = set(manifest.pages)
@@ -113,7 +124,7 @@ def build_publish_plan(
         for source_path in discovered
         if manifest.pages[source_path].page_id is None
     )
-    if missing_page_ids and not create_missing_pages:
+    if missing_page_ids and not (create_missing_pages or sync_enabled):
         entries = ", ".join(missing_page_ids)
         raise PlannerError(
             "Cannot publish project: pages are missing page_id values: "
@@ -147,6 +158,8 @@ def build_publish_plan(
                 title=title,
                 url=manifest_page.url,
                 parent_source_path=parent_source_path,
+                content_hash=manifest_page.content_hash,
+                last_synced_at=manifest_page.last_synced_at,
             )
         )
 
@@ -163,7 +176,13 @@ def build_publish_plan(
         ),
         space=manifest.space,
         root_page_id=manifest.root_page_id,
+        root_url=manifest.root_url,
+        root_parent_page_id=manifest.root_parent_page_id,
+        root_parent_url=manifest.root_parent_url,
         create_missing_pages=create_missing_pages,
+        sync_enabled=sync_enabled,
+        recreate_missing_root=recreate_missing_root,
+        recreate_stale_pages=recreate_stale_pages,
         excluded_count=excluded_count,
         items=tuple(items),
     )

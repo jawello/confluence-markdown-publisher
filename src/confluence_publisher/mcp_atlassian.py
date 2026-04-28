@@ -118,6 +118,22 @@ def _cql_string(value: str) -> str:
     return f'"{escaped}"'
 
 
+def _page_url(payload: dict[str, Any]) -> str | None:
+    url = payload.get("url")
+    if isinstance(url, str) and url:
+        return url
+    links = payload.get("_links")
+    if not isinstance(links, dict):
+        return None
+    webui = links.get("webui")
+    if not isinstance(webui, str) or not webui:
+        return None
+    base = links.get("base")
+    if isinstance(base, str) and base:
+        return f"{base.rstrip('/')}/{webui.lstrip('/')}"
+    return webui
+
+
 def _page_infos(payload: object, tool_name: str) -> list[PageInfo]:
     if not isinstance(payload, list):
         raise McpToolError(f"{tool_name} returned no page list")
@@ -129,7 +145,7 @@ def _page_infos(payload: object, tool_name: str) -> list[PageInfo]:
         title = item.get("title")
         if page_id is None or str(page_id) == "" or not isinstance(title, str) or not title:
             raise McpToolError(f"{tool_name} returned invalid page item")
-        pages.append(PageInfo(page_id=str(page_id), title=title))
+        pages.append(PageInfo(page_id=str(page_id), title=title, url=_page_url(item)))
     return pages
 
 
@@ -167,7 +183,11 @@ class McpAtlassianClient:
         title = payload.get("title")
         if not isinstance(title, str) or not title:
             raise McpToolError(f"confluence_get_page returned no title for page {page_id}")
-        return PageInfo(page_id=str(payload.get("id", page_id)), title=title)
+        return PageInfo(
+            page_id=str(payload.get("id", page_id)),
+            title=title,
+            url=_page_url(payload),
+        )
 
     async def create_page(
         self,
@@ -196,9 +216,11 @@ class McpAtlassianClient:
         if not isinstance(page_id, str) or not page_id:
             raise McpToolError("confluence_create_page returned no page id")
         page_title = page_payload.get("title")
+        page_url = _page_url(page_payload) or _page_url(payload)
         return PageInfo(
             page_id=page_id,
             title=page_title if isinstance(page_title, str) and page_title else title,
+            url=page_url,
         )
 
     async def search_pages_by_title(

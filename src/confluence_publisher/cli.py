@@ -60,6 +60,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--plan-only", action="store_true")
     parser.add_argument("--create-missing-pages", action="store_true")
+    parser.add_argument("--sync", action="store_true")
+    parser.add_argument("--recreate-missing-root", action="store_true")
+    parser.add_argument("--recreate-stale-pages", action="store_true")
     parser.add_argument("--comment")
     parser.add_argument(
         "--output-format",
@@ -92,6 +95,12 @@ def validate_args(args: argparse.Namespace) -> None:
             raise SystemExit("--plan-only is only supported with --project")
         if args.create_missing_pages:
             raise SystemExit("--create-missing-pages is only supported with --project")
+        if args.sync:
+            raise SystemExit("--sync is only supported with --project")
+        if args.recreate_missing_root:
+            raise SystemExit("--recreate-missing-root is only supported with --project")
+        if args.recreate_stale_pages:
+            raise SystemExit("--recreate-stale-pages is only supported with --project")
     if args.project is not None:
         if args.page_id:
             raise SystemExit("--page-id is not supported with --project")
@@ -221,7 +230,19 @@ async def run_project_mode(args: argparse.Namespace) -> int:
     try:
         manifest = load_manifest(
             manifest_path,
-            allow_missing_page_ids=args.create_missing_pages,
+            allow_missing_page_ids=True,
+        )
+        sync_enabled = (
+            manifest.sync.enabled
+            or args.sync
+            or args.recreate_missing_root
+            or args.recreate_stale_pages
+        )
+        recreate_missing_root = (
+            manifest.sync.recreate_missing_root or args.recreate_missing_root
+        )
+        recreate_stale_pages = (
+            manifest.sync.recreate_stale_pages or args.recreate_stale_pages
         )
         try:
             discovery = discover_markdown_files(
@@ -241,6 +262,9 @@ async def run_project_mode(args: argparse.Namespace) -> int:
             diagram_width=args.diagram_width if args.diagram_width_explicit else None,
             allow_diagram_fallback=True if args.allow_diagram_fallback else None,
             create_missing_pages=args.create_missing_pages,
+            sync_enabled=sync_enabled,
+            recreate_missing_root=recreate_missing_root,
+            recreate_stale_pages=recreate_stale_pages,
         )
     except (ManifestError, PlannerError, OSError) as exc:
         raise SystemExit(str(exc)) from exc
@@ -264,6 +288,9 @@ async def run_project_mode(args: argparse.Namespace) -> int:
             dry_run=True,
             mmdc_bin=args.mmdc_bin,
         )
+
+    if plan.sync_enabled:
+        raise SystemExit("Sync publishing is not implemented yet")
 
     if not args.yes:
         answer = input("Publish project to Confluence? Type 'yes' to continue: ")

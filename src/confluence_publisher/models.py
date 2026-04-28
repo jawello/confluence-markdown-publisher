@@ -42,3 +42,4 @@ class RenderedDiagram:
 class PageInfo:
     page_id: str
     title: str
+    url: str | None = None

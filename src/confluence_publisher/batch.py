@@ -20,6 +20,14 @@ def format_publish_plan(plan: PublishPlan) -> str:
     ]
     if plan.root_page_id is not None:
         lines.append(f"Root page: {plan.root_page_id}")
+    if plan.sync_enabled:
+        lines.extend(
+            [
+                "Sync: enabled",
+                f"Recreate missing root: {'yes' if plan.recreate_missing_root else 'no'}",
+                f"Recreate stale pages: {'yes' if plan.recreate_stale_pages else 'no'}",
+            ]
+        )
     lines.extend(["", "Pages:"])
     for item in plan.items:
         lines.extend(

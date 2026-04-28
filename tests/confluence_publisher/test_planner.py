@@ -1,6 +1,6 @@
 import pytest
 
-from confluence_publisher.manifest import ManifestPage, ProjectManifest
+from confluence_publisher.manifest import ManifestPage, ProjectManifest, SyncSettings
 from confluence_publisher.planner import PlannerError, build_publish_plan
 
 
@@ -18,8 +18,15 @@ def manifest(tmp_path, pages):
     )
 
 
-def page(path, page_id, title=None, url=None):
-    return ManifestPage(path=path, page_id=page_id, title=title, url=url)
+def page(path, page_id, title=None, url=None, content_hash=None, last_synced_at=None):
+    return ManifestPage(
+        path=path,
+        page_id=page_id,
+        title=title,
+        url=url,
+        content_hash=content_hash,
+        last_synced_at=last_synced_at,
+    )
 
 
 def test_build_publish_plan_resolves_titles_and_parents(tmp_path):
@@ -122,11 +129,123 @@ def test_build_publish_plan_allows_missing_page_ids_with_create_mode(tmp_path):
     assert plan.items[1].parent_source_path == "index.md"
 
 
+def test_build_publish_plan_carries_sync_settings_and_root_parent(tmp_path):
+    (tmp_path / "index.md").write_text("# Home\n", encoding="utf-8")
+    project_manifest = ProjectManifest(
+        path=tmp_path / ".confluence-publish.yml",
+        space="~6393203da593cb822e995262",
+        include=("**/*.md",),
+        exclude=(),
+        version_comment="Sync docs",
+        output_format="svg",
+        diagram_width=1000,
+        allow_diagram_fallback=False,
+        pages={
+            "index.md": page(
+                "index.md",
+                "111111",
+                content_hash="sha256:abc123",
+                last_synced_at="2026-04-28T07:00:00Z",
+            )
+        },
+        root_page_id="111111",
+        root_url="https://criteo.atlassian.net/wiki/pages/111111/Home",
+        root_parent_page_id="2163738446",
+        root_parent_url="https://criteo.atlassian.net/wiki/pages/2163738446/Docs",
+        sync=SyncSettings(enabled=True, recreate_missing_root=True),
+    )
+
+    plan = build_publish_plan(
+        project_root=tmp_path,
+        manifest=project_manifest,
+        discovered_paths=("index.md",),
+        excluded_count=0,
+        version_comment=None,
+        output_format=None,
+        diagram_width=None,
+        allow_diagram_fallback=None,
+        sync_enabled=True,
+        recreate_missing_root=True,
+        recreate_stale_pages=False,
+    )
+
+    assert plan.sync_enabled is True
+    assert plan.recreate_missing_root is True
+    assert plan.recreate_stale_pages is False
+    assert plan.root_url == "https://criteo.atlassian.net/wiki/pages/111111/Home"
+    assert plan.root_parent_page_id == "2163738446"
+    assert plan.root_parent_url == "https://criteo.atlassian.net/wiki/pages/2163738446/Docs"
+    assert plan.items[0].content_hash == "sha256:abc123"
+    assert plan.items[0].last_synced_at == "2026-04-28T07:00:00Z"
+
+
+def test_build_publish_plan_allows_missing_page_ids_with_sync_mode(tmp_path):
+    (tmp_path / "index.md").write_text("# Home\n", encoding="utf-8")
+    project_manifest = ProjectManifest(
+        path=tmp_path / ".confluence-publish.yml",
+        space="~6393203da593cb822e995262",
+        include=("**/*.md",),
+        exclude=(),
+        version_comment="Sync docs",
+        output_format="svg",
+        diagram_width=1000,
+        allow_diagram_fallback=False,
+        pages={"index.md": page("index.md", None)},
+        root_parent_page_id="2163738446",
+        sync=SyncSettings(enabled=True),
+    )
+
+    plan = build_publish_plan(
+        project_root=tmp_path,
+        manifest=project_manifest,
+        discovered_paths=("index.md",),
+        excluded_count=0,
+        version_comment=None,
+        output_format=None,
+        diagram_width=None,
+        allow_diagram_fallback=None,
+        sync_enabled=True,
+        recreate_missing_root=False,
+        recreate_stale_pages=False,
+    )
+
+    assert plan.items[0].page_id is None
+
+
 def test_build_publish_plan_rejects_create_mode_without_root_page(tmp_path):
     (tmp_path / "index.md").write_text("# Home\n", encoding="utf-8")
     project_manifest = manifest(tmp_path, {"index.md": page("index.md", None)})
 
     with pytest.raises(PlannerError, match="root page"):
+        build_publish_plan(
+            project_root=tmp_path,
+            manifest=project_manifest,
+            discovered_paths=("index.md",),
+            excluded_count=0,
+            version_comment=None,
+            output_format=None,
+            diagram_width=None,
+            allow_diagram_fallback=None,
+            create_missing_pages=True,
+        )
+
+
+def test_build_publish_plan_rejects_create_mode_without_space(tmp_path):
+    (tmp_path / "index.md").write_text("# Home\n", encoding="utf-8")
+    project_manifest = ProjectManifest(
+        path=tmp_path / ".confluence-publish.yml",
+        space=None,
+        include=("**/*.md",),
+        exclude=(),
+        version_comment="Sync docs",
+        output_format="svg",
+        diagram_width=1000,
+        allow_diagram_fallback=False,
+        pages={"index.md": page("index.md", None)},
+        root_page_id="999999",
+    )
+
+    with pytest.raises(PlannerError, match="Confluence space"):
         build_publish_plan(
             project_root=tmp_path,
             manifest=project_manifest,

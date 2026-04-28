@@ -146,6 +146,48 @@ async def test_client_gets_page_info():
 
 
 @pytest.mark.asyncio
+async def test_client_get_page_reads_url_from_links_payload():
+    session = FakeMcpSession(
+        page_result={
+            "structuredContent": {
+                "id": "5151854234",
+                "title": "Test",
+                "_links": {
+                    "base": "https://criteo.atlassian.net/wiki",
+                    "webui": "/spaces/~6393203da593cb822e995262/pages/5151854234/Test",
+                },
+            }
+        }
+    )
+    client = McpAtlassianClient(session)
+
+    page = await client.get_page("5151854234")
+
+    assert page.url == (
+        "https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/"
+        "pages/5151854234/Test"
+    )
+
+
+@pytest.mark.asyncio
+async def test_client_get_page_reads_url_from_url_payload():
+    session = FakeMcpSession(
+        page_result={
+            "structuredContent": {
+                "id": "5151854234",
+                "title": "Test",
+                "url": "https://criteo.atlassian.net/wiki/pages/5151854234/Test",
+            }
+        }
+    )
+    client = McpAtlassianClient(session)
+
+    page = await client.get_page("5151854234")
+
+    assert page.url == "https://criteo.atlassian.net/wiki/pages/5151854234/Test"
+
+
+@pytest.mark.asyncio
 async def test_client_get_page_rejects_missing_title():
     session = FakeMcpSession(page_result={"structuredContent": {"id": "5151854234"}})
     client = McpAtlassianClient(session)
@@ -250,6 +292,64 @@ async def test_client_create_page_parses_fastmcp_wrapped_json_result():
 
     assert page.page_id == "5155097071"
     assert page.title == "Overview"
+
+
+@pytest.mark.asyncio
+async def test_create_page_reads_url_from_links_payload():
+    session = FakeMcpSession(
+        create_result={
+            "structuredContent": {
+                "page": {
+                    "id": "5155099000",
+                    "title": "Overview",
+                    "_links": {
+                        "base": "https://criteo.atlassian.net/wiki",
+                        "webui": "/spaces/~6393203da593cb822e995262/pages/5155099000/Overview",
+                    },
+                }
+            }
+        }
+    )
+    client = McpAtlassianClient(session)
+
+    page = await client.create_page(
+        space_key="~6393203da593cb822e995262",
+        title="Overview",
+        parent_id="2163738446",
+        storage="<p>Created.</p>",
+    )
+
+    assert page.page_id == "5155099000"
+    assert page.url == (
+        "https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/"
+        "pages/5155099000/Overview"
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_page_reads_url_from_wrapper_payload():
+    session = FakeMcpSession(
+        create_result={
+            "structuredContent": {
+                "page": {
+                    "id": "5155099001",
+                    "title": "Overview",
+                },
+                "url": "https://criteo.atlassian.net/wiki/pages/5155099001/Overview",
+            }
+        }
+    )
+    client = McpAtlassianClient(session)
+
+    page = await client.create_page(
+        space_key="~6393203da593cb822e995262",
+        title="Overview",
+        parent_id="2163738446",
+        storage="<p>Created.</p>",
+    )
+
+    assert page.page_id == "5155099001"
+    assert page.url == "https://criteo.atlassian.net/wiki/pages/5155099001/Overview"
 
 
 @pytest.mark.asyncio
