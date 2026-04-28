@@ -23,6 +23,7 @@ Keep Markdown and project manifests as the source of truth. Do not add hidden st
 - Do not include credentials, tokens, or copied secret values in code, tests, docs, commits, or logs.
 - Do not mention AI tools in commits, branches, merge requests, or user-facing project text.
 - This repository does not require ticket IDs in commit messages.
+- After behavior, workflow, CLI, manifest, or documentation contract changes, check whether related local skills need updates. Update the corresponding skill files when the change affects future agent workflows, especially `confluence-docs-publishing`.
 
 ## Verification
 
