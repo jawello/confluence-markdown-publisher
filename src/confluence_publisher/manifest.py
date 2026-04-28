@@ -60,6 +60,23 @@ class ManifestPage:
     page_id: str | None
     title: str | None = None
     url: str | None = None
+    content_hash: str | None = None
+    last_synced_at: str | None = None
+
+
+@dataclass(frozen=True)
+class SyncSettings:
+    enabled: bool = False
+    recreate_missing_root: bool = False
+    recreate_stale_pages: bool = False
+
+
+@dataclass(frozen=True)
+class ManifestPageSyncState:
+    page_id: str | None = None
+    url: str | None = None
+    content_hash: str | None = None
+    last_synced_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -75,6 +92,9 @@ class ProjectManifest:
     pages: dict[str, ManifestPage]
     root_page_id: str | None = None
     root_url: str | None = None
+    root_parent_page_id: str | None = None
+    root_parent_url: str | None = None
+    sync: SyncSettings = SyncSettings()
 
 
 def _as_mapping(value: Any, field_name: str) -> dict[str, Any]:
@@ -114,6 +134,32 @@ def _optional_str(value: Any, field_name: str) -> str | None:
     return value
 
 
+def _optional_bool(value: Any, field_name: str, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise ManifestError(f"{field_name} must be a boolean")
+    return value
+
+
+def _sync_settings(root: dict[str, Any]) -> SyncSettings:
+    sync_raw = root.get("sync")
+    if sync_raw is None:
+        return SyncSettings()
+    sync_data = _as_mapping(sync_raw, "sync")
+    return SyncSettings(
+        enabled=_optional_bool(sync_data.get("enabled"), "sync.enabled"),
+        recreate_missing_root=_optional_bool(
+            sync_data.get("recreate_missing_root"),
+            "sync.recreate_missing_root",
+        ),
+        recreate_stale_pages=_optional_bool(
+            sync_data.get("recreate_stale_pages"),
+            "sync.recreate_stale_pages",
+        ),
+    )
+
+
 def _positive_int(value: Any, field_name: str, default: int) -> int:
     if value is None:
         return default
@@ -149,15 +195,24 @@ def _space_from_url(url: str) -> str | None:
     return None
 
 
-def _root_metadata(root: dict[str, Any]) -> tuple[str | None, str | None, str | None]:
+def _root_metadata(
+    root: dict[str, Any],
+) -> tuple[str | None, str | None, str | None, str | None, str | None]:
     root_raw = root.get("root")
     root_page_id = _optional_str(root.get("root_page_id"), "root_page_id")
     root_url = _optional_str(root.get("root_url"), "root_url")
+    root_parent_page_id = None
+    root_parent_url = None
 
     if root_raw is not None:
         root_data = _as_mapping(root_raw, "root")
         nested_page_id = _optional_str(root_data.get("page_id"), "root.page_id")
         nested_url = _optional_str(root_data.get("url"), "root.url")
+        root_parent_page_id = _optional_str(
+            root_data.get("parent_page_id"),
+            "root.parent_page_id",
+        )
+        root_parent_url = _optional_str(root_data.get("parent_url"), "root.parent_url")
         if (
             root_page_id is not None
             and nested_page_id is not None
@@ -177,7 +232,23 @@ def _root_metadata(root: dict[str, Any]) -> tuple[str | None, str | None, str | 
             raise ManifestError(f"root.url must contain root page_id {root_page_id}")
         root_page_id = root_page_id or url_page_id
 
-    return root_page_id, root_url, _space_from_url(root_url) if root_url is not None else None
+    if root_parent_url is not None:
+        parent_url_page_id = _page_id_from_url(root_parent_url)
+        if parent_url_page_id is None:
+            raise ManifestError("root.parent_url must contain a Confluence page ID")
+        if root_parent_page_id is not None and root_parent_page_id != parent_url_page_id:
+            raise ManifestError(
+                f"root.parent_url must contain parent_page_id {root_parent_page_id}"
+            )
+        root_parent_page_id = root_parent_page_id or parent_url_page_id
+
+    root_space = None
+    if root_url is not None:
+        root_space = _space_from_url(root_url)
+    if root_space is None and root_parent_url is not None:
+        root_space = _space_from_url(root_parent_url)
+
+    return root_page_id, root_url, root_parent_page_id, root_parent_url, root_space
 
 
 def load_manifest(path: Path, *, allow_missing_page_ids: bool = False) -> ProjectManifest:
@@ -194,7 +265,8 @@ def load_manifest(path: Path, *, allow_missing_page_ids: bool = False) -> Projec
     root = _as_mapping(raw, "manifest")
     defaults = _as_mapping(root.get("defaults", {}), "defaults")
     pages_raw = _as_mapping(root.get("pages"), "pages")
-    root_page_id, root_url, root_space = _root_metadata(root)
+    root_page_id, root_url, root_parent_page_id, root_parent_url, root_space = _root_metadata(root)
+    sync = _sync_settings(root)
 
     output_format = defaults.get("output_format", "svg")
     if not isinstance(output_format, str) or output_format not in SUPPORTED_OUTPUT_FORMATS:
@@ -231,6 +303,14 @@ def load_manifest(path: Path, *, allow_missing_page_ids: bool = False) -> Projec
 
         title = _optional_str(page_data.get("title"), f"pages.{page_path}.title")
         url = _optional_str(page_data.get("url"), f"pages.{page_path}.url")
+        content_hash = _optional_str(
+            page_data.get("content_hash"),
+            f"pages.{page_path}.content_hash",
+        )
+        last_synced_at = _optional_str(
+            page_data.get("last_synced_at"),
+            f"pages.{page_path}.last_synced_at",
+        )
         if (
             page_id is not None
             and url is not None
@@ -238,7 +318,14 @@ def load_manifest(path: Path, *, allow_missing_page_ids: bool = False) -> Projec
         ):
             raise ManifestError(f"pages.{page_path}.url must contain page_id {page_id}")
 
-        pages[page_path] = ManifestPage(path=page_path, page_id=page_id, title=title, url=url)
+        pages[page_path] = ManifestPage(
+            path=page_path,
+            page_id=page_id,
+            title=title,
+            url=url,
+            content_hash=content_hash,
+            last_synced_at=last_synced_at,
+        )
 
     return ProjectManifest(
         path=path,
@@ -252,6 +339,9 @@ def load_manifest(path: Path, *, allow_missing_page_ids: bool = False) -> Projec
         pages=pages,
         root_page_id=root_page_id,
         root_url=root_url,
+        root_parent_page_id=root_parent_page_id,
+        root_parent_url=root_parent_url,
+        sync=sync,
     )
 
 
@@ -269,6 +359,61 @@ def write_manifest_page_ids(path: Path, page_ids: dict[str, str]) -> None:
         normalized_path = _normalize_page_path(page_path)
         page_data = _as_mapping(pages.get(normalized_path), f"pages.{normalized_path}")
         page_data["page_id"] = page_id
+
+    path.write_text(
+        yaml.safe_dump(root, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+
+
+def write_manifest_sync_state(
+    path: Path,
+    *,
+    root_page_id: str | None = None,
+    root_url: str | None = None,
+    pages: dict[str, ManifestPageSyncState],
+) -> None:
+    try:
+        raw = yaml.load(path.read_text(encoding="utf-8"), Loader=_UniqueKeySafeLoader)
+    except yaml.YAMLError as exc:
+        raise ManifestError(f"Invalid YAML in manifest {path}: {exc}") from exc
+
+    if raw is None:
+        raw = {}
+    root = _as_mapping(raw, "manifest")
+    root_block = root.get("root")
+    if root_block is not None:
+        root_data = _as_mapping(root_block, "root")
+    elif "root_page_id" not in root or "root_url" not in root:
+        root_block = {}
+        root["root"] = root_block
+        root_data = root_block
+    else:
+        root_data = None
+
+    if root_page_id is not None:
+        if "root_page_id" in root:
+            root["root_page_id"] = root_page_id
+        if root_data is not None and ("page_id" in root_data or "root_page_id" not in root):
+            root_data["page_id"] = root_page_id
+    if root_url is not None:
+        if "root_url" in root:
+            root["root_url"] = root_url
+        if root_data is not None and ("url" in root_data or "root_url" not in root):
+            root_data["url"] = root_url
+
+    pages_block = _as_mapping(root.get("pages"), "pages")
+    for page_path, state in pages.items():
+        normalized_path = _normalize_page_path(page_path)
+        page_data = _as_mapping(pages_block.get(normalized_path), f"pages.{normalized_path}")
+        if state.page_id is not None:
+            page_data["page_id"] = state.page_id
+        if state.url is not None:
+            page_data["url"] = state.url
+        if state.content_hash is not None:
+            page_data["content_hash"] = state.content_hash
+        if state.last_synced_at is not None:
+            page_data["last_synced_at"] = state.last_synced_at
 
     path.write_text(
         yaml.safe_dump(root, sort_keys=False, allow_unicode=True),

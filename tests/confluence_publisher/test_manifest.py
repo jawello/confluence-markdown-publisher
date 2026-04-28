@@ -4,9 +4,12 @@ import pytest
 
 from confluence_publisher.manifest import (
     ManifestError,
+    ManifestPageSyncState,
     ProjectManifest,
+    SyncSettings,
     load_manifest,
     write_manifest_page_ids,
+    write_manifest_sync_state,
 )
 
 
@@ -350,3 +353,140 @@ pages:
 
     with pytest.raises(ManifestError, match="Invalid page path"):
         load_manifest(manifest_path)
+
+
+def test_load_manifest_reads_sync_root_parent_and_page_hashes(tmp_path):
+    manifest_path = tmp_path / ".confluence-publish.yml"
+    manifest_path.write_text(
+        """
+space: "~6393203da593cb822e995262"
+sync:
+  enabled: true
+  recreate_missing_root: true
+  recreate_stale_pages: false
+root:
+  parent_page_id: "2163738446"
+  parent_url: "https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/pages/2163738446/Overview"
+  page_id: "5155097071"
+  url: "https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/pages/5155097071/White-label+NEXT+Deployment+-+Overview"
+pages:
+  00-overview.md:
+    title: "White-label NEXT Deployment - Overview"
+    page_id: "5155097071"
+    url: "https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/pages/5155097071/White-label+NEXT+Deployment+-+Overview"
+    content_hash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    last_synced_at: "2026-04-28T12:00:00Z"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    manifest = load_manifest(manifest_path)
+
+    assert manifest.sync == SyncSettings(
+        enabled=True,
+        recreate_missing_root=True,
+        recreate_stale_pages=False,
+    )
+    assert manifest.root_parent_page_id == "2163738446"
+    assert manifest.root_parent_url.endswith("/2163738446/Overview")
+    assert manifest.root_page_id == "5155097071"
+    page = manifest.pages["00-overview.md"]
+    assert page.content_hash == "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    assert page.last_synced_at == "2026-04-28T12:00:00Z"
+
+
+def test_load_manifest_rejects_non_boolean_sync_setting(tmp_path):
+    manifest_path = tmp_path / ".confluence-publish.yml"
+    manifest_path.write_text(
+        """
+sync:
+  enabled: "yes"
+pages:
+  index.md:
+    page_id: "111111"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ManifestError, match="sync.enabled"):
+        load_manifest(manifest_path)
+
+
+def test_write_manifest_sync_state_updates_root_and_pages_preserving_titles(tmp_path):
+    manifest_path = tmp_path / ".confluence-publish.yml"
+    manifest_path.write_text(
+        """
+root:
+  parent_page_id: "2163738446"
+  page_id: "old-root"
+pages:
+  00-overview.md:
+    title: "Overview"
+    page_id: "old-root"
+  guide/index.md:
+    title: "Guide"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    write_manifest_sync_state(
+        manifest_path,
+        root_page_id="new-root",
+        root_url="https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/pages/new-root/Overview",
+        pages={
+            "00-overview.md": ManifestPageSyncState(
+                page_id="new-root",
+                url="https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/pages/new-root/Overview",
+                content_hash="sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                last_synced_at="2026-04-28T13:00:00Z",
+            ),
+            "guide/index.md": ManifestPageSyncState(
+                page_id="new-guide",
+                url="https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/pages/new-guide/Guide",
+                content_hash="sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                last_synced_at="2026-04-28T13:00:00Z",
+            ),
+        },
+    )
+
+    manifest = load_manifest(manifest_path)
+    assert manifest.root_parent_page_id == "2163738446"
+    assert manifest.root_page_id == "new-root"
+    assert manifest.root_url.endswith("/new-root/Overview")
+    assert manifest.pages["00-overview.md"].title == "Overview"
+    assert manifest.pages["00-overview.md"].page_id == "new-root"
+    assert manifest.pages["guide/index.md"].page_id == "new-guide"
+    assert manifest.pages["guide/index.md"].content_hash.startswith("sha256:")
+    assert manifest.pages["guide/index.md"].last_synced_at == "2026-04-28T13:00:00Z"
+
+
+def test_write_manifest_sync_state_updates_legacy_top_level_root_metadata(tmp_path):
+    manifest_path = tmp_path / ".confluence-publish.yml"
+    manifest_path.write_text(
+        """
+root_page_id: "old-root"
+root_url: "https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/pages/old-root/Overview"
+pages:
+  index.md:
+    title: "Overview"
+    page_id: "old-root"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    write_manifest_sync_state(
+        manifest_path,
+        root_page_id="new-root",
+        root_url="https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/pages/new-root/Overview",
+        pages={
+            "index.md": ManifestPageSyncState(
+                page_id="new-root",
+                url="https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/pages/new-root/Overview",
+            ),
+        },
+    )
+
+    manifest = load_manifest(manifest_path)
+    assert manifest.root_page_id == "new-root"
+    assert manifest.root_url.endswith("/new-root/Overview")
+    assert manifest.pages["index.md"].page_id == "new-root"
