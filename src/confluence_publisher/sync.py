@@ -503,6 +503,10 @@ async def _publish_prepared_sync_pages(
         page_id = page_ids.get(source_path)
         if page_id is None:
             continue
+        created = source_path in created_pages
+        changed = prepared.item.content_hash != prepared.content_hash or created
+        if not changed:
+            continue
         for rendered in prepared.rendered_diagrams:
             await client.upload_attachment(page_id, rendered.output_path)
         await client.update_page_storage(
@@ -519,7 +523,7 @@ async def _publish_prepared_sync_pages(
                 source_path: ManifestPageSyncState(
                     page_id=page_id,
                     url=_created_url(created_pages[source_path], plan=plan, item=prepared.item)
-                    if source_path in created_pages
+                    if created
                     else prepared.item.url,
                     content_hash=prepared.content_hash,
                     last_synced_at=synced_at,

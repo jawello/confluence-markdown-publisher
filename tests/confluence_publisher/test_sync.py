@@ -434,9 +434,141 @@ pages:
 
 
 @pytest.mark.asyncio
-async def test_sync_project_missing_child_page_id_creates_under_root(tmp_path):
+async def test_sync_project_skips_page_with_matching_hash(tmp_path):
+    from confluence_publisher.manifest import load_manifest
+    from confluence_publisher.sync import prepare_sync_pages, sync_project
+
+    source = tmp_path / "index.md"
+    source.write_text("# Home\n\nPlain text.\n", encoding="utf-8")
+    base_item = PlannedPage("index.md", source, "111111", "Home", None, None)
+    base_plan = PublishPlan(
+        project_root=tmp_path,
+        manifest_path=tmp_path / ".confluence-publish.yml",
+        version_comment="Sync docs",
+        output_format="svg",
+        diagram_width=1000,
+        allow_diagram_fallback=False,
+        excluded_count=0,
+        items=(base_item,),
+        space="~6393203da593cb822e995262",
+        root_page_id="111111",
+        sync_enabled=True,
+    )
+    content_hash = prepare_sync_pages(base_plan, mmdc_bin="mmdc")["index.md"].content_hash
+    manifest_path = tmp_path / ".confluence-publish.yml"
+    manifest_path.write_text(
+        f"""
+space: "~6393203da593cb822e995262"
+root:
+  page_id: "111111"
+pages:
+  index.md:
+    page_id: "111111"
+    title: "Home"
+    content_hash: "{content_hash}"
+    last_synced_at: "2026-04-28T12:00:00Z"
+""".strip(),
+        encoding="utf-8",
+    )
+    plan = PublishPlan(
+        project_root=tmp_path,
+        manifest_path=manifest_path,
+        version_comment="Sync docs",
+        output_format="svg",
+        diagram_width=1000,
+        allow_diagram_fallback=False,
+        excluded_count=0,
+        items=(
+            PlannedPage(
+                "index.md",
+                source,
+                "111111",
+                "Home",
+                None,
+                None,
+                content_hash=content_hash,
+                last_synced_at="2026-04-28T12:00:00Z",
+            ),
+        ),
+        space="~6393203da593cb822e995262",
+        root_page_id="111111",
+        sync_enabled=True,
+    )
+    client = FakeSyncClient()
+
+    result = await sync_project(plan, client=client, dry_run=False, mmdc_bin="mmdc")
+
+    assert result == 0
+    assert client.calls == [("get_page", "111111")]
+    manifest = load_manifest(manifest_path)
+    assert manifest.pages["index.md"].last_synced_at == "2026-04-28T12:00:00Z"
+
+
+@pytest.mark.asyncio
+async def test_sync_project_updates_page_with_changed_hash(tmp_path):
     from confluence_publisher.manifest import load_manifest
     from confluence_publisher.sync import sync_project
+
+    source = tmp_path / "index.md"
+    source.write_text("# Home\n\nChanged text.\n", encoding="utf-8")
+    manifest_path = tmp_path / ".confluence-publish.yml"
+    manifest_path.write_text(
+        """
+space: "~6393203da593cb822e995262"
+root:
+  page_id: "111111"
+pages:
+  index.md:
+    page_id: "111111"
+    title: "Home"
+    content_hash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    last_synced_at: "2026-04-28T12:00:00Z"
+""".strip(),
+        encoding="utf-8",
+    )
+    plan = PublishPlan(
+        project_root=tmp_path,
+        manifest_path=manifest_path,
+        version_comment="Sync docs",
+        output_format="svg",
+        diagram_width=1000,
+        allow_diagram_fallback=False,
+        excluded_count=0,
+        items=(
+            PlannedPage(
+                "index.md",
+                source,
+                "111111",
+                "Home",
+                None,
+                None,
+                content_hash="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                last_synced_at="2026-04-28T12:00:00Z",
+            ),
+        ),
+        space="~6393203da593cb822e995262",
+        root_page_id="111111",
+        sync_enabled=True,
+    )
+    client = FakeSyncClient()
+
+    result = await sync_project(plan, client=client, dry_run=False, mmdc_bin="mmdc")
+
+    assert result == 0
+    assert ("update_page_storage", "111111", "Home", "Sync docs") in client.calls
+    manifest = load_manifest(manifest_path)
+    assert manifest.pages["index.md"].content_hash.startswith("sha256:")
+    assert (
+        manifest.pages["index.md"].content_hash
+        != "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    )
+    assert manifest.pages["index.md"].last_synced_at != "2026-04-28T12:00:00Z"
+
+
+@pytest.mark.asyncio
+async def test_sync_project_missing_child_page_id_creates_under_root(tmp_path):
+    from confluence_publisher.manifest import load_manifest
+    from confluence_publisher.sync import prepare_sync_pages, sync_project
 
     child_dir = tmp_path / "guide"
     child_dir.mkdir()
@@ -459,11 +591,26 @@ pages:
 """.strip(),
         encoding="utf-8",
     )
+    child_hash_plan = sync_plan(
+        tmp_path,
+        items=(PlannedPage("guide/index.md", child, None, "Guide", None, "index.md"),),
+    )
+    child_hash = prepare_sync_pages(child_hash_plan, mmdc_bin="mmdc")[
+        "guide/index.md"
+    ].content_hash
     plan = sync_plan(
         tmp_path,
         items=(
             PlannedPage("index.md", root, "111111", "Home", None, None),
-            PlannedPage("guide/index.md", child, None, "Guide", None, "index.md"),
+            PlannedPage(
+                "guide/index.md",
+                child,
+                None,
+                "Guide",
+                None,
+                "index.md",
+                content_hash=child_hash,
+            ),
         ),
     )
     plan = PublishPlan(**{**plan.__dict__, "manifest_path": manifest_path})
@@ -474,6 +621,7 @@ pages:
     assert result == 0
     assert ("search_pages_by_title", "~6393203da593cb822e995262", "Guide") in client.calls
     assert ("create_page", "~6393203da593cb822e995262", "Guide", "111111", "800001") in client.calls
+    assert ("update_page_storage", "800001", "Guide", "Sync docs") in client.calls
     manifest = load_manifest(manifest_path)
     assert manifest.pages["guide/index.md"].page_id == "800001"
     assert manifest.pages["guide/index.md"].content_hash.startswith("sha256:")
