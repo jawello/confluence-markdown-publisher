@@ -29,7 +29,7 @@ This keeps Markdown as the source of truth and avoids depending on manual Gliffy
 - This tool is not a full Markdown-to-Confluence implementation.
 - It does not try to render Mermaid inside Confluence.
 - By default it does not create Confluence pages. Missing-page creation is available only through an explicit project-mode flag.
-- It does not move, reorder, or repair Confluence page tree relationships.
+- It does not delete, move, or reorder Confluence page tree relationships.
 - It does not provide a hosted service, daemon, or scheduler.
 - It does not store rendered diagrams permanently in the repository.
 - It does not currently make publishing atomic. Attachments are uploaded before the page body is updated.
@@ -58,6 +58,7 @@ The CLI orchestrates the whole publish operation. Most modules are intentionally
 | `project.py` | Discover Markdown files under a project root with include and exclude patterns. |
 | `planner.py` | Build validated project publish plans from discovered files and manifest pages. |
 | `batch.py` | Execute project publish plans by reusing the single-page publishing pipeline. |
+| `sync.py` | Reconcile manifest state with readable Confluence pages, recreate missing pages when policy allows it, and skip unchanged content by hash. |
 | `converter.py` | Find fenced code blocks, collect Mermaid metadata, convert Markdown to storage-ready HTML fragments. |
 | `renderer.py` | Call `mmdc` and validate that a rendered output file was produced. |
 | `storage.py` | Build Confluence storage macros for code, images, expand blocks, fallback panels, and TOC. |
@@ -140,6 +141,61 @@ Project mode does not create Confluence pages by default. Missing `page_id` mapp
 
 When `--create-missing-pages` is enabled, the manifest must provide a root Confluence page through `root.page_id`, `root.url`, `root_page_id`, or `root_url`. The planner allows manifest pages without `page_id`, orders parents before children, and records the root page as the parent for top-level pages. Live publishing creates missing pages through `confluence_create_page`, writes the returned `page_id` values back to `.confluence-publish.yml`, then publishes page content through the existing update pipeline. `--plan-only` reports the pages that would be created without connecting to MCP, and `--dry-run` previews storage without creating pages.
 
+## Sync Recovery Flow
+
+Sync mode extends project mode for standalone documentation projects where the manifest is allowed to track Confluence identity and publish state:
+
+```yaml
+space: "~6393203da593cb822e995262"
+
+sync:
+  enabled: true
+  recreate_missing_root: true
+  recreate_stale_pages: true
+
+root:
+  parent_page_id: "2163738446"
+  page_id: "5155097071"
+  url: "https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/pages/5155097071/Project+Overview"
+
+pages:
+  00-overview.md:
+    page_id: "5155097071"
+    title: "Project Overview"
+    content_hash: "sha256:..."
+    last_synced_at: "2026-04-28T12:00:00Z"
+```
+
+The effective sync policy is the union of manifest settings and CLI flags:
+
+- `sync.enabled: true` or `--sync` routes project publishing through `sync_project()`.
+- `sync.recreate_missing_root: true` or `--recreate-missing-root` allows root recreation.
+- `sync.recreate_stale_pages: true` or `--recreate-stale-pages` allows non-root stale page recreation.
+- The recreate flags imply sync mode for that run.
+
+Live sync flow:
+
+1. The CLI builds and prints the same project publish plan as normal project mode.
+2. If the root page has a `page_id`, `sync_project()` verifies it is readable with `confluence_get_page`.
+3. If the root is not readable, root recreation requires `recreate_missing_root` and `root.parent_page_id`.
+4. The parent page is validated before any root recreation side effect.
+5. Existing non-root page IDs are checked for readability.
+6. Unreadable non-root pages require `recreate_stale_pages`.
+7. Recreating a stale page also recreates its descendants so the local tree remains attached to the new parent chain.
+8. Pages without `page_id` are created under their planned parent when the root is readable.
+9. Before any create operation, the tool checks local duplicate titles and Confluence title collisions in the target space.
+10. Each successful create immediately writes the new `page_id` and URL to `.confluence-publish.yml`.
+11. The page content is rendered to storage format and hashed.
+12. Existing pages whose stored manifest hash matches the new hash are skipped.
+13. Pages that changed or were just created are updated through the regular attachment-upload and storage-update pipeline.
+14. After a successful page update, the manifest receives the page `content_hash` and `last_synced_at` timestamp.
+
+The content hash includes the page title, generated storage XHTML, output format, diagram width, fallback policy, and a hash schema version. This is intentionally local-state based; the tool does not read remote page bodies to reconstruct hashes.
+
+`--plan-only` stops after plan validation and never renders, connects to MCP, creates pages, or writes the manifest. `--dry-run` renders local storage previews through the sync path without connecting to MCP or writing the manifest.
+
+Sync recovery does not delete orphaned Confluence pages, empty trash, move existing pages, or repair remote tree relationships for readable pages. Those operations stay manual because they are destructive or ambiguous in shared Confluence spaces.
+
 ## Mermaid Handling
 
 Mermaid diagrams are rendered locally because Confluence does not provide a reliable automatic Mermaid rendering path for this workflow.
@@ -202,14 +258,18 @@ uvx --from mcp-atlassian>=0.17.0 mcp-atlassian --enabled-tools ...
 
 The enabled tool set is limited to Confluence page and attachment operations:
 
+- `confluence_search`
 - `confluence_get_page`
 - `confluence_get_attachments`
+- `confluence_create_page`
 - `confluence_upload_attachment`
 - `confluence_update_page`
 
 Runtime publishing uses:
 
 - `confluence_get_page` when `--title` is omitted in live mode
+- `confluence_get_page` and `confluence_search` for sync preflight validation
+- `confluence_create_page` for explicit missing-page creation and sync recovery
 - `confluence_upload_attachment` for rendered diagrams
 - `confluence_update_page` for the final storage-format page body
 
@@ -234,6 +294,9 @@ The default behavior is fail-fast:
 - Invalid project manifests and unsafe include or exclude patterns stop project publishing before side effects.
 - Missing project `page_id` mappings stop normal project publishing before rendering or MCP startup.
 - In explicit create mode, missing `page_id` mappings are created under the configured root page and persisted to the manifest before content updates.
+- In sync mode, unreadable root and stale page IDs fail before creation unless the matching recreation policy is enabled.
+- Sync title collisions are checked before page creation because Confluence titles are unique within a space.
+- Sync writes created page identities immediately after each successful create, and writes content hashes only after successful content updates.
 - Missing Confluence environment variables stop live publishing before MCP startup.
 - MCP tool errors are converted into Python exceptions with bounded error messages.
 
@@ -258,6 +321,7 @@ Safety controls:
 - The first part of generated storage is printed before publishing.
 - Normal project mode fails before side effects when discovered Markdown files are missing manifest `page_id` mappings.
 - Create mode has an explicit side effect boundary: no page creation during `--plan-only` or `--dry-run`; live publishing asks for confirmation unless `--yes` is passed.
+- Sync mode keeps the same side effect boundary and also skips existing pages when the stored content hash still matches rendered local content.
 - Project discovery rejects unsafe include and exclude patterns and skips symlinked Markdown paths.
 - Confluence credentials stay in environment variables.
 - Rendered diagrams are written only to a temporary directory and removed when the process exits.
@@ -283,6 +347,7 @@ Coverage areas:
 - Markdown project discovery with include, exclude, and safety boundaries.
 - Publish-plan construction and project-mode CLI orchestration.
 - Batch publishing behavior in dry-run and live modes.
+- Sync recovery behavior for missing roots, stale pages, missing page IDs, title preflight, manifest writes, and unchanged-page skipping.
 
 The standard verification command is:
 
@@ -327,6 +392,25 @@ Project publish:
 uv run publish-confluence \
   --project docs \
   --comment "Sync guide updates" \
+  --yes
+```
+
+Project sync with manifest defaults:
+
+```bash
+uv run publish-confluence \
+  --project docs \
+  --yes
+```
+
+One-time sync recovery override:
+
+```bash
+uv run publish-confluence \
+  --project docs \
+  --sync \
+  --recreate-missing-root \
+  --recreate-stale-pages \
   --yes
 ```
 
