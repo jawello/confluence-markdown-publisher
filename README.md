@@ -114,6 +114,25 @@ pages:
     title: "Guide"
 ```
 
+Flat documentation sets can also declare a local documentation root with `root.source_path`. In that mode, top-level pages without an explicit `parent` are created as children of the local root page, and the local root page is created under `root.parent_page_id`:
+
+```yaml
+space: "~6393203da593cb822e995262"
+
+root:
+  source_path: "00-overview.md"
+  parent_page_id: "999999"
+
+pages:
+  00-overview.md:
+    title: "Project Overview"
+  01-prerequisites.md:
+    title: "Prerequisites"
+  02-guide.md:
+    title: "Guide"
+    parent: "01-prerequisites.md"
+```
+
 ```bash
 uv run publish-confluence \
   --project docs \
@@ -136,6 +155,7 @@ sync:
   recreate_stale_pages: true
 
 root:
+  source_path: "00-overview.md"
   parent_page_id: "2163738446"
   page_id: "5155097071"
   url: "https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/pages/5155097071/Project+Overview"

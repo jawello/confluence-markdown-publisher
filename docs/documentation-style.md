@@ -9,16 +9,17 @@ The reusable task prompt in [documentation-agent-prompt.md](documentation-agent-
 - Keep Markdown files as the source of truth for page content.
 - Keep `.confluence-publish.yml` as the only source of truth for Confluence page IDs.
 - By default, do not create Confluence pages from this tool. Add existing `page_id` values to the manifest instead.
-- Use `--create-missing-pages` only when the manifest has a root Confluence page and the intended result is to create the missing child pages.
+- Use `--create-missing-pages` only when the manifest defines the intended Confluence parent. For flat docs, use `root.source_path` for the local docs root and `root.parent_page_id` for the existing Confluence parent.
 - Do not add hidden state files, generated page maps, or page IDs inside Markdown front matter.
 - Do not include credentials, tokens, copied secret values, or private scratch notes in publishable files.
 
 ## Project Layout
 
 - Put `.confluence-publish.yml` at the documentation root unless the command uses `--manifest`.
-- For create mode, add `root.page_id` or `root.url` for the existing Confluence root page.
+- For legacy create mode, add `root.page_id` or `root.url` for the existing Confluence root page.
+- For flat documentation, add `root.source_path` for the local root page and `root.parent_page_id` for the existing Confluence parent.
 - Use `index.md` as the logical page for each directory.
-- Every nested Markdown page must have a nearest ancestor directory with an `index.md` manifest entry.
+- Every nested Markdown page must have a nearest ancestor directory with an `index.md` manifest entry, unless it declares `parent` in the manifest.
 - Store publishable files under normal directories only. Do not rely on symlinks, generated folders, absolute paths, or parent traversal.
 - Keep drafts, private notes, scratch files, and generated output outside the publishable tree or exclude them explicitly.
 
@@ -41,7 +42,7 @@ docs/
 - Use POSIX relative paths for all `pages` keys, for example `index.md` or `guide/getting-started.md`.
 - Add a `pages` entry for every included Markdown file.
 - Treat `page_id` as required in normal mode.
-- In create mode, pages without `page_id` are created under the root page or nearest parent `index.md`, then the returned `page_id` values are written back to the manifest.
+- In create mode, pages without `page_id` are created under the root page, the nearest parent `index.md`, or the explicit `parent` source path, then the returned `page_id` values are written back to the manifest.
 - Add `url` when known. It must contain the exact Confluence page ID path segment.
 - Use `title` only when the Confluence title should differ from the first Markdown H1 or when the page needs an explicit stable title.
 - Put shared behavior in `defaults`, especially `version_comment`, `output_format`, `diagram_width`, and `allow_diagram_fallback`.
@@ -94,6 +95,28 @@ pages:
     title: "Guide"
 ```
 
+Flat create-mode manifest baseline:
+
+```yaml
+space: "~6393203da593cb822e995262"
+
+root:
+  source_path: "00-overview.md"
+  parent_page_id: "<existing-confluence-parent-page-id>"
+
+include:
+  - "*.md"
+
+pages:
+  00-overview.md:
+    title: "Project Overview"
+  01-prerequisites.md:
+    title: "Prerequisites"
+  02-guide.md:
+    title: "Guide"
+    parent: "01-prerequisites.md"
+```
+
 ## Markdown Style
 
 - Start every publishable page with one clear H1.
@@ -142,7 +165,7 @@ Before publishing:
 2. Create or update `.confluence-publish.yml`.
 3. Ensure every included Markdown file has a `page_id`, unless this is an approved first-time run with `--create-missing-pages`.
 4. Ensure every manifest page exists on disk.
-5. Ensure nested pages have a parent `index.md` entry.
+5. Ensure nested pages have a parent `index.md` entry or an explicit manifest `parent`.
 6. Run:
 
 ```bash

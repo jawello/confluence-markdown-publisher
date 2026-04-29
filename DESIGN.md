@@ -127,8 +127,8 @@ Project mode flow:
 4. Symlinked files and files under symlinked directories are skipped to avoid publishing outside-root content.
 5. `planner.build_publish_plan()` checks that every discovered Markdown file exists in `pages`.
 6. Manifest entries that point to missing local files are rejected.
-7. `index.md` is treated as the logical page for its directory.
-8. Nested documents require a nearest ancestor `index.md` entry in the manifest.
+7. `index.md` is treated as the logical page for its directory unless the manifest opts into an explicit local root with `root.source_path`.
+8. Nested documents require a nearest ancestor `index.md` entry in the manifest unless they use an explicit `pages.<path>.parent`.
 9. Titles come from manifest `title`, then the first Markdown H1, then the file stem.
 10. Optional `url` values are validated by exact page ID path segment.
 11. The CLI prints the publish plan before rendering or connecting to Confluence.
@@ -139,7 +139,7 @@ Project mode flow:
 
 Project mode does not create Confluence pages by default. Missing `page_id` mappings are planning errors that stop the run before rendering or MCP startup.
 
-When `--create-missing-pages` is enabled, the manifest must provide a root Confluence page through `root.page_id`, `root.url`, `root_page_id`, or `root_url`. The planner allows manifest pages without `page_id`, orders parents before children, and records the root page as the parent for top-level pages. Live publishing creates missing pages through `confluence_create_page`, writes the returned `page_id` values back to `.confluence-publish.yml`, then publishes page content through the existing update pipeline. `--plan-only` reports the pages that would be created without connecting to MCP, and `--dry-run` previews storage without creating pages.
+When `--create-missing-pages` is enabled, the manifest must provide a parent for missing pages. Legacy manifests provide an existing Confluence root page through `root.page_id`, `root.url`, `root_page_id`, or `root_url`; missing top-level pages are created under that page. Explicit hierarchy manifests set `root.source_path` to the local documentation root and `root.parent_page_id` to the existing Confluence parent; the local root is created under `root.parent_page_id`, and top-level pages without `pages.<path>.parent` are created under `root.source_path`. The planner allows manifest pages without `page_id`, validates explicit parents, detects parent cycles, orders parents before children, and preserves legacy `index.md` hierarchy for manifests without `root.source_path`. Live publishing creates missing pages through `confluence_create_page`, writes the returned `page_id` values back to `.confluence-publish.yml`, then publishes page content through the existing update pipeline. `--plan-only` reports the pages that would be created without connecting to MCP, and `--dry-run` previews storage without creating pages.
 
 ## Sync Recovery Flow
 
@@ -154,6 +154,7 @@ sync:
   recreate_stale_pages: true
 
 root:
+  source_path: "00-overview.md"
   parent_page_id: "2163738446"
   page_id: "5155097071"
   url: "https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/pages/5155097071/Project+Overview"
