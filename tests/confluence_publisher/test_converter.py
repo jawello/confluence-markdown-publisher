@@ -230,6 +230,72 @@ def test_convert_blockquotes_to_confluence_panels():
     assert "Warning: check this first" in result
 
 
+def test_convert_unchecked_task_item_to_confluence_incomplete_task():
+    markdown = "* [ ] GCP APIs enabled:\n"
+
+    result = convert_markdown_to_storage(
+        markdown,
+        page_slug="00-overview",
+        output_format="svg",
+        diagram_fragments={},
+    )
+
+    assert "<ac:task-list>" in result
+    assert "<ac:task-status>incomplete</ac:task-status>" in result
+    assert "<ac:task-body>GCP APIs enabled:</ac:task-body>" in result
+    assert "[ ]" not in result
+
+
+def test_convert_checked_task_item_to_confluence_complete_task():
+    markdown = "- [X] Database migration reviewed\n"
+
+    result = convert_markdown_to_storage(
+        markdown,
+        page_slug="00-overview",
+        output_format="svg",
+        diagram_fragments={},
+    )
+
+    assert "<ac:task-list>" in result
+    assert "<ac:task-status>complete</ac:task-status>" in result
+    assert "<ac:task-body>Database migration reviewed</ac:task-body>" in result
+    assert "[X]" not in result
+
+
+def test_convert_nested_api_bullets_remain_inside_task_body():
+    markdown = """- [ ] GCP APIs enabled:
+  - `sqladmin.googleapis.com`
+  - `container.googleapis.com`
+"""
+
+    result = convert_markdown_to_storage(
+        markdown,
+        page_slug="00-overview",
+        output_format="svg",
+        diagram_fragments={},
+    )
+
+    assert "<ac:task-body>GCP APIs enabled:<ul>" in result
+    assert "<li><code>sqladmin.googleapis.com</code></li>" in result
+    assert "<li><code>container.googleapis.com</code></li>" in result
+    assert result.index("<ul>") > result.index("<ac:task-body>")
+    assert result.index("</ul>") < result.index("</ac:task-body>")
+
+
+def test_convert_normal_unordered_list_is_unchanged():
+    markdown = "- GCP APIs enabled\n- Database migration reviewed\n"
+
+    result = convert_markdown_to_storage(
+        markdown,
+        page_slug="00-overview",
+        output_format="svg",
+        diagram_fragments={},
+    )
+
+    assert result == "<ul>\n<li>GCP APIs enabled</li>\n<li>Database migration reviewed</li>\n</ul>"
+    assert "<ac:task-list>" not in result
+
+
 def test_three_headings_adds_toc_macro():
     markdown = "# One\n\n## Two\n\n## Three\n"
 

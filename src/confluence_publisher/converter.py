@@ -4,7 +4,7 @@ import re
 from typing import Mapping
 
 import markdown as markdown_lib
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString
 
 from .models import DiagramBlock
 from .storage import code_macro, fallback_mermaid_fragment, toc_macro
@@ -17,6 +17,9 @@ _FENCE_RE = re.compile(
 )
 _PLACEHOLDER = "CONFLUENCE_PUBLISHER_BLOCK_PLACEHOLDER_9f8d8a1f_"
 _CONFLUENCE_DIRECTIVE_RE = re.compile(r"^%%\s*confluence:\s*width=(?P<width>\d+)\s*%%$")
+_TASK_ITEM_RE = re.compile(r"^(?P<indent> *)[-*][ \t]+\[(?P<status>[ xX])\][ \t]+")
+_TASK_MARKER_RE = re.compile(r"^(?P<prefix>\s*)\[(?P<status>[ xX])\][ \t]+")
+_BULLET_ITEM_RE = re.compile(r"^(?P<indent> *)(?P<bullet>[-*+])(?P<space>[ \t]+)")
 
 
 def _display_width_from_source(source: str) -> int | None:
@@ -74,6 +77,94 @@ def _replace_blockquotes_with_panels(html: str) -> str:
     return str(soup)
 
 
+def _normalize_task_list_child_indentation(markdown_text: str) -> str:
+    lines = markdown_text.splitlines(keepends=True)
+    normalized: list[str] = []
+    active_task_indents: list[int] = []
+
+    for line in lines:
+        content = line.rstrip("\r\n")
+        newline = line[len(content) :]
+        stripped = content.lstrip(" ")
+
+        if stripped:
+            indent = len(content) - len(stripped)
+            while active_task_indents and indent <= active_task_indents[-1]:
+                active_task_indents.pop()
+
+            if active_task_indents and indent == active_task_indents[-1] + 2:
+                child_match = _BULLET_ITEM_RE.match(content)
+                if child_match is not None:
+                    content = f"{child_match.group('indent')}  {content[indent:]}"
+
+            task_match = _TASK_ITEM_RE.match(content)
+            if task_match is not None:
+                active_task_indents.append(len(task_match.group("indent")))
+
+        normalized.append(f"{content}{newline}")
+
+    return "".join(normalized)
+
+
+def _task_status_from_list_item(list_item) -> str | None:
+    for descendant in list_item.descendants:
+        if not isinstance(descendant, NavigableString):
+            continue
+        text = str(descendant)
+        if not text.strip():
+            continue
+        match = _TASK_MARKER_RE.match(text)
+        if match is None:
+            return None
+        return "complete" if match.group("status").lower() == "x" else "incomplete"
+    return None
+
+
+def _remove_task_marker(list_item) -> None:
+    for descendant in list_item.descendants:
+        if not isinstance(descendant, NavigableString):
+            continue
+        text = str(descendant)
+        if not text.strip():
+            continue
+        match = _TASK_MARKER_RE.match(text)
+        if match is None:
+            return
+        descendant.replace_with(f"{match.group('prefix')}{text[match.end():]}")
+        return
+
+
+def _replace_task_lists_with_confluence_tasks(html: str) -> str:
+    soup = BeautifulSoup(html, "html.parser")
+    for bullet_list in list(soup.find_all("ul")):
+        list_items = bullet_list.find_all("li", recursive=False)
+        if not list_items:
+            continue
+
+        statuses = [_task_status_from_list_item(list_item) for list_item in list_items]
+        if any(status is None for status in statuses):
+            continue
+
+        task_list = soup.new_tag("ac:task-list")
+        for list_item, status in zip(list_items, statuses):
+            _remove_task_marker(list_item)
+
+            task = soup.new_tag("ac:task")
+            task_status = soup.new_tag("ac:task-status")
+            task_status.string = status
+            task_body = soup.new_tag("ac:task-body")
+            for child in list(list_item.contents):
+                task_body.append(child.extract())
+
+            task.append(task_status)
+            task.append(task_body)
+            task_list.append(task)
+
+        bullet_list.replace_with(task_list)
+
+    return str(soup)
+
+
 def convert_markdown_to_storage(
     markdown_text: str,
     page_slug: str,
@@ -102,8 +193,10 @@ def convert_markdown_to_storage(
         return f"\n\n{_PLACEHOLDER}{index}\n\n"
 
     without_fences = _FENCE_RE.sub(replace_fence, markdown_text)
-    html = markdown_lib.markdown(without_fences, extensions=["tables", "sane_lists"])
+    normalized_markdown = _normalize_task_list_child_indentation(without_fences)
+    html = markdown_lib.markdown(normalized_markdown, extensions=["tables", "sane_lists"])
     html = _replace_blockquotes_with_panels(html)
+    html = _replace_task_lists_with_confluence_tasks(html)
 
     for index, fragment in code_fragments.items():
         marker = f"{_PLACEHOLDER}{index}"
