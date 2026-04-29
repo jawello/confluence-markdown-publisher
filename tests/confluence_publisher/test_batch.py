@@ -3,16 +3,18 @@ from pathlib import Path
 import pytest
 
 from confluence_publisher import batch
+from confluence_publisher.manifest import load_manifest
 from confluence_publisher.mcp_atlassian import McpToolError
 from confluence_publisher.models import PageInfo
 from confluence_publisher.planner import PlannedPage, PublishPlan
 
 
 class FakeClient:
-    def __init__(self, search_results=None, page_errors=None):
+    def __init__(self, search_results=None, page_errors=None, create_page_ids=None):
         self.calls = []
         self.search_results = search_results or {}
         self.page_errors = page_errors or {}
+        self.create_page_ids = list(create_page_ids or ["222222"])
 
     async def get_page(self, page_id: str) -> PageInfo:
         self.calls.append(("get_page", page_id))
@@ -33,7 +35,7 @@ class FakeClient:
         storage: str,
     ) -> PageInfo:
         self.calls.append(("create_page", space_key, title, parent_id, "<p>" in storage))
-        return PageInfo(page_id="222222", title=title)
+        return PageInfo(page_id=self.create_page_ids.pop(0), title=title)
 
     async def upload_attachment(self, page_id: str, file_path: Path) -> None:
         self.calls.append(("upload_attachment", page_id, file_path.name))
@@ -203,3 +205,77 @@ async def test_publish_project_preflights_parent_visibility_before_title_search(
         await batch.publish_project(plan, client=client, dry_run=False, mmdc_bin="mmdc")
 
     assert client.calls == [("get_page", "999999")]
+
+
+@pytest.mark.asyncio
+async def test_publish_project_create_missing_pages_creates_explicit_root_under_parent(
+    tmp_path,
+):
+    root = tmp_path / "00-overview.md"
+    child = tmp_path / "01-prerequisites.md"
+    root.write_text("# Overview\n\nPlain text.\n", encoding="utf-8")
+    child.write_text("# Prerequisites\n\nPlain text.\n", encoding="utf-8")
+    manifest_path = tmp_path / ".confluence-publish.yml"
+    manifest_path.write_text(
+        """
+root:
+  source_path: "00-overview.md"
+  parent_page_id: "5151786651"
+space: "~6393203da593cb822e995262"
+pages:
+  00-overview.md:
+    title: "Overview"
+  01-prerequisites.md:
+    title: "Prerequisites"
+""".strip(),
+        encoding="utf-8",
+    )
+    plan = PublishPlan(
+        project_root=tmp_path,
+        manifest_path=manifest_path,
+        version_comment="Sync docs",
+        output_format="svg",
+        diagram_width=1000,
+        allow_diagram_fallback=False,
+        excluded_count=0,
+        space="~6393203da593cb822e995262",
+        root_source_path="00-overview.md",
+        root_parent_page_id="5151786651",
+        create_missing_pages=True,
+        items=(
+            PlannedPage(
+                source_path="00-overview.md",
+                absolute_path=root,
+                page_id=None,
+                title="Overview",
+                url=None,
+                parent_source_path=None,
+            ),
+            PlannedPage(
+                source_path="01-prerequisites.md",
+                absolute_path=child,
+                page_id=None,
+                title="Prerequisites",
+                url=None,
+                parent_source_path="00-overview.md",
+            ),
+        ),
+    )
+    client = FakeClient(create_page_ids=["700001", "700002"])
+
+    result = await batch.publish_project(plan, client=client, dry_run=False, mmdc_bin="mmdc")
+
+    assert result == 0
+    assert client.calls == [
+        ("get_page", "5151786651"),
+        ("search_pages_by_title", "~6393203da593cb822e995262", "Overview"),
+        ("search_pages_by_title", "~6393203da593cb822e995262", "Prerequisites"),
+        ("create_page", "~6393203da593cb822e995262", "Overview", "5151786651", True),
+        ("create_page", "~6393203da593cb822e995262", "Prerequisites", "700001", True),
+        ("update_page_storage", "700001", "Overview", "Sync docs", True),
+        ("update_page_storage", "700002", "Prerequisites", "Sync docs", True),
+    ]
+    updated_manifest = load_manifest(manifest_path)
+    assert updated_manifest.root_page_id == "700001"
+    assert updated_manifest.pages["00-overview.md"].page_id == "700001"
+    assert updated_manifest.pages["01-prerequisites.md"].page_id == "700002"

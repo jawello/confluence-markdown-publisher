@@ -212,6 +212,166 @@ def test_build_publish_plan_allows_missing_page_ids_with_sync_mode(tmp_path):
     assert plan.items[0].page_id is None
 
 
+def test_build_publish_plan_uses_explicit_root_for_flat_pages(tmp_path):
+    (tmp_path / "00-overview.md").write_text("# Overview\n", encoding="utf-8")
+    (tmp_path / "01-prerequisites.md").write_text("# Prerequisites\n", encoding="utf-8")
+    (tmp_path / "02-copy-and-rename.md").write_text("# Copying\n", encoding="utf-8")
+    project_manifest = ProjectManifest(
+        path=tmp_path / ".confluence-publish.yml",
+        space="~6393203da593cb822e995262",
+        include=("*.md",),
+        exclude=(),
+        version_comment="Sync docs",
+        output_format="svg",
+        diagram_width=1000,
+        allow_diagram_fallback=False,
+        pages={
+            "00-overview.md": page("00-overview.md", None, title="Overview"),
+            "01-prerequisites.md": page("01-prerequisites.md", None, title="Prerequisites"),
+            "02-copy-and-rename.md": page("02-copy-and-rename.md", None, title="Copying"),
+        },
+        root_source_path="00-overview.md",
+        root_parent_page_id="5151786651",
+    )
+
+    plan = build_publish_plan(
+        project_root=tmp_path,
+        manifest=project_manifest,
+        discovered_paths=("02-copy-and-rename.md", "01-prerequisites.md", "00-overview.md"),
+        excluded_count=0,
+        version_comment=None,
+        output_format=None,
+        diagram_width=None,
+        allow_diagram_fallback=None,
+        create_missing_pages=True,
+    )
+
+    assert plan.root_source_path == "00-overview.md"
+    assert [item.source_path for item in plan.items] == [
+        "00-overview.md",
+        "01-prerequisites.md",
+        "02-copy-and-rename.md",
+    ]
+    assert plan.items[0].parent_source_path is None
+    assert plan.items[1].parent_source_path == "00-overview.md"
+    assert plan.items[2].parent_source_path == "00-overview.md"
+
+
+def test_build_publish_plan_explicit_parent_overrides_root_default(tmp_path):
+    (tmp_path / "00-overview.md").write_text("# Overview\n", encoding="utf-8")
+    (tmp_path / "01-prerequisites.md").write_text("# Prerequisites\n", encoding="utf-8")
+    (tmp_path / "02-copy-and-rename.md").write_text("# Copying\n", encoding="utf-8")
+    project_manifest = ProjectManifest(
+        path=tmp_path / ".confluence-publish.yml",
+        space="~6393203da593cb822e995262",
+        include=("*.md",),
+        exclude=(),
+        version_comment="Sync docs",
+        output_format="svg",
+        diagram_width=1000,
+        allow_diagram_fallback=False,
+        pages={
+            "00-overview.md": page("00-overview.md", "5156570282", title="Overview"),
+            "01-prerequisites.md": page("01-prerequisites.md", "5156602817", title="Prerequisites"),
+            "02-copy-and-rename.md": ManifestPage(
+                path="02-copy-and-rename.md",
+                page_id="5156308816",
+                title="Copying",
+                parent="01-prerequisites.md",
+            ),
+        },
+        root_source_path="00-overview.md",
+        root_page_id="5156570282",
+    )
+
+    plan = build_publish_plan(
+        project_root=tmp_path,
+        manifest=project_manifest,
+        discovered_paths=("02-copy-and-rename.md", "01-prerequisites.md", "00-overview.md"),
+        excluded_count=0,
+        version_comment=None,
+        output_format=None,
+        diagram_width=None,
+        allow_diagram_fallback=None,
+    )
+
+    parent_by_source = {item.source_path: item.parent_source_path for item in plan.items}
+    assert parent_by_source["01-prerequisites.md"] == "00-overview.md"
+    assert parent_by_source["02-copy-and-rename.md"] == "01-prerequisites.md"
+    assert [item.source_path for item in plan.items].index("01-prerequisites.md") < [
+        item.source_path for item in plan.items
+    ].index("02-copy-and-rename.md")
+
+
+def test_build_publish_plan_rejects_explicit_parent_cycles(tmp_path):
+    (tmp_path / "00-overview.md").write_text("# Overview\n", encoding="utf-8")
+    (tmp_path / "01-prerequisites.md").write_text("# Prerequisites\n", encoding="utf-8")
+    project_manifest = ProjectManifest(
+        path=tmp_path / ".confluence-publish.yml",
+        space="~6393203da593cb822e995262",
+        include=("*.md",),
+        exclude=(),
+        version_comment="Sync docs",
+        output_format="svg",
+        diagram_width=1000,
+        allow_diagram_fallback=False,
+        pages={
+            "00-overview.md": ManifestPage(
+                path="00-overview.md",
+                page_id="5156570282",
+                parent="01-prerequisites.md",
+            ),
+            "01-prerequisites.md": ManifestPage(
+                path="01-prerequisites.md",
+                page_id="5156602817",
+                parent="00-overview.md",
+            ),
+        },
+    )
+
+    with pytest.raises(PlannerError, match="parent cycle.*00-overview.md"):
+        build_publish_plan(
+            project_root=tmp_path,
+            manifest=project_manifest,
+            discovered_paths=("00-overview.md", "01-prerequisites.md"),
+            excluded_count=0,
+            version_comment=None,
+            output_format=None,
+            diagram_width=None,
+            allow_diagram_fallback=None,
+        )
+
+
+def test_build_publish_plan_rejects_root_source_path_not_in_publish_plan(tmp_path):
+    (tmp_path / "00-overview.md").write_text("# Overview\n", encoding="utf-8")
+    project_manifest = ProjectManifest(
+        path=tmp_path / ".confluence-publish.yml",
+        space="~6393203da593cb822e995262",
+        include=("01-*.md",),
+        exclude=(),
+        version_comment="Sync docs",
+        output_format="svg",
+        diagram_width=1000,
+        allow_diagram_fallback=False,
+        pages={"00-overview.md": page("00-overview.md", None, title="Overview")},
+        root_source_path="00-overview.md",
+        root_parent_page_id="5151786651",
+    )
+
+    with pytest.raises(PlannerError, match="root.source_path.*00-overview.md.*publish plan"):
+        build_publish_plan(
+            project_root=tmp_path,
+            manifest=project_manifest,
+            discovered_paths=(),
+            excluded_count=1,
+            version_comment=None,
+            output_format=None,
+            diagram_width=None,
+            allow_diagram_fallback=None,
+            create_missing_pages=True,
+        )
+
+
 def test_build_publish_plan_rejects_create_mode_without_root_page(tmp_path):
     (tmp_path / "index.md").write_text("# Home\n", encoding="utf-8")
     project_manifest = manifest(tmp_path, {"index.md": page("index.md", None)})

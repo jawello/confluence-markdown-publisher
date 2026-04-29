@@ -359,6 +359,65 @@ pages:
 
 
 @pytest.mark.asyncio
+async def test_run_async_project_create_missing_pages_uses_explicit_flat_root(
+    tmp_path, monkeypatch
+):
+    (tmp_path / "00-overview.md").write_text("# Overview\n", encoding="utf-8")
+    (tmp_path / "01-prerequisites.md").write_text("# Prerequisites\n", encoding="utf-8")
+    manifest_path = tmp_path / ".confluence-publish.yml"
+    manifest_path.write_text(
+        """
+space: "~6393203da593cb822e995262"
+root:
+  source_path: "00-overview.md"
+  parent_page_id: "5151786651"
+pages:
+  00-overview.md:
+    title: "Overview"
+  01-prerequisites.md:
+    title: "Prerequisites"
+""".strip(),
+        encoding="utf-8",
+    )
+    client = FakeClient()
+
+    monkeypatch.setattr(cli, "connect_mcp_atlassian", fake_connect_for(client))
+
+    result = await cli.run_async(["--project", str(tmp_path), "--create-missing-pages", "--yes"])
+
+    assert result == 0
+    assert client.calls == [
+        ("get_page", "5151786651"),
+        ("search_pages_by_title", "~6393203da593cb822e995262", "Overview"),
+        ("search_pages_by_title", "~6393203da593cb822e995262", "Prerequisites"),
+        ("create_page", "~6393203da593cb822e995262", "Overview", "5151786651", True, "700001"),
+        ("create_page", "~6393203da593cb822e995262", "Prerequisites", "700001", True, "700002"),
+        (
+            "update_page_storage",
+            "700001",
+            "Overview",
+            False,
+            False,
+            False,
+            "Sync documentation from Markdown",
+        ),
+        (
+            "update_page_storage",
+            "700002",
+            "Prerequisites",
+            False,
+            False,
+            False,
+            "Sync documentation from Markdown",
+        ),
+    ]
+    updated_manifest = load_manifest(manifest_path)
+    assert updated_manifest.root_page_id == "700001"
+    assert updated_manifest.pages["00-overview.md"].page_id == "700001"
+    assert updated_manifest.pages["01-prerequisites.md"].page_id == "700002"
+
+
+@pytest.mark.asyncio
 async def test_run_async_project_plan_only_create_missing_pages_does_not_connect(
     tmp_path, monkeypatch, capsys
 ):

@@ -79,6 +79,8 @@ async def _preflight_missing_page_parents(
             parent_id = page_ids.get(item.parent_source_path)
             if parent_id is None:
                 continue
+        elif plan.root_source_path is not None and item.source_path == plan.root_source_path:
+            parent_id = plan.root_parent_page_id
         else:
             parent_id = plan.root_page_id
         if parent_id is not None:
@@ -104,19 +106,33 @@ async def publish_project(plan: PublishPlan, *, client, dry_run: bool, mmdc_bin:
     page_ids = {item.source_path: item.page_id for item in plan.items if item.page_id is not None}
 
     if plan.create_missing_pages and not dry_run:
-        if plan.root_page_id is None or plan.space is None:
-            raise RuntimeError("Cannot create missing pages without root page and space")
+        if plan.space is None:
+            raise RuntimeError("Cannot create missing pages without a Confluence space")
+        if plan.root_source_path is None and plan.root_page_id is None:
+            raise RuntimeError("Cannot create missing pages without root page")
+        if plan.root_source_path is not None:
+            root_item = next(
+                (item for item in plan.items if item.source_path == plan.root_source_path),
+                None,
+            )
+            if root_item is None:
+                raise RuntimeError("Cannot create missing pages without root source page")
+            if root_item.page_id is None and plan.root_parent_page_id is None:
+                raise RuntimeError("Cannot create missing root page without root.parent_page_id")
         await _preflight_missing_page_parents(plan, client=client, page_ids=page_ids)
         await _preflight_missing_page_titles(plan, client=client)
         created_page_ids: dict[str, str] = {}
         for item in plan.items:
             if item.page_id is not None:
                 continue
-            parent_id = (
-                page_ids[item.parent_source_path]
-                if item.parent_source_path is not None
-                else plan.root_page_id
-            )
+            if item.parent_source_path is not None:
+                parent_id = page_ids[item.parent_source_path]
+            elif plan.root_source_path is not None and item.source_path == plan.root_source_path:
+                parent_id = plan.root_parent_page_id
+            else:
+                parent_id = plan.root_page_id
+            if parent_id is None:
+                raise RuntimeError(f"Cannot create missing page without parent: {item.source_path}")
             created = await client.create_page(
                 space_key=plan.space,
                 title=item.title,

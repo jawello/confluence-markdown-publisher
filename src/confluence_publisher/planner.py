@@ -34,6 +34,7 @@ class PublishPlan:
     excluded_count: int
     items: tuple[PlannedPage, ...]
     space: str | None = None
+    root_source_path: str | None = None
     root_page_id: str | None = None
     root_url: str | None = None
     root_parent_page_id: str | None = None
@@ -63,7 +64,7 @@ def _sort_key(source_path: str) -> tuple[str, int, str]:
     return (parent, is_index, source_path)
 
 
-def _parent_for(source_path: str, manifest_paths: set[str]) -> str | None:
+def _index_parent_for(source_path: str, manifest_paths: set[str]) -> str | None:
     path = PurePosixPath(source_path)
     if path.name == "index.md":
         if str(path.parent) in ("", "."):
@@ -81,6 +82,61 @@ def _parent_for(source_path: str, manifest_paths: set[str]) -> str | None:
     if "index.md" in manifest_paths and source_path != "index.md":
         return "index.md"
     return None
+
+
+def _is_top_level(source_path: str) -> bool:
+    return PurePosixPath(source_path).parent.as_posix() in ("", ".")
+
+
+def _parent_for(source_path: str, manifest: ProjectManifest) -> str | None:
+    manifest_page = manifest.pages[source_path]
+    if manifest_page.parent is not None:
+        return manifest_page.parent
+
+    manifest_paths = set(manifest.pages)
+    if manifest.root_source_path is not None:
+        if source_path == manifest.root_source_path:
+            return None
+        if _is_top_level(source_path):
+            return manifest.root_source_path
+        parent = _index_parent_for(source_path, manifest_paths)
+        if parent is not None:
+            return parent
+        path = PurePosixPath(source_path)
+        if path.name == "index.md" and len(path.parts) == 2:
+            return manifest.root_source_path
+        return None
+
+    return _index_parent_for(source_path, manifest_paths)
+
+
+def _ordered_source_paths(
+    source_paths: tuple[str, ...],
+    parent_by_path: dict[str, str | None],
+) -> list[str]:
+    ordered: list[str] = []
+    visited: set[str] = set()
+    stack: list[str] = []
+
+    def visit(source_path: str) -> None:
+        if source_path in visited:
+            return
+        if source_path in stack:
+            cycle = " -> ".join(stack[stack.index(source_path) :] + [source_path])
+            raise PlannerError(f"Cannot publish project: parent cycle detected: {cycle}")
+
+        stack.append(source_path)
+        parent = parent_by_path[source_path]
+        if parent is not None:
+            visit(parent)
+        stack.pop()
+        visited.add(source_path)
+        ordered.append(source_path)
+
+    for source_path in sorted(source_paths, key=_sort_key):
+        visit(source_path)
+
+    return ordered
 
 
 def build_publish_plan(
@@ -118,6 +174,11 @@ def build_publish_plan(
             "Cannot publish project: pages are listed in manifest but missing on disk: "
             f"{entries}"
         )
+    if manifest.root_source_path is not None and manifest.root_source_path not in discovered:
+        raise PlannerError(
+            "Cannot publish project: root.source_path "
+            f"{manifest.root_source_path} is not included in the publish plan"
+        )
 
     missing_page_ids = sorted(
         source_path
@@ -131,19 +192,33 @@ def build_publish_plan(
             f"{entries}"
         )
     if missing_page_ids and create_missing_pages:
-        if not manifest.root_page_id:
-            raise PlannerError("Cannot create missing pages without a root page")
         if not manifest.space:
             raise PlannerError("Cannot create missing pages without a Confluence space")
+        if manifest.root_source_path is not None:
+            root_page = manifest.pages[manifest.root_source_path]
+            if root_page.page_id is None and not manifest.root_parent_page_id:
+                raise PlannerError(
+                    "Cannot create missing root page without root.parent_page_id"
+                )
+        elif not manifest.root_page_id:
+            raise PlannerError("Cannot create missing pages without a root page")
 
-    items: list[PlannedPage] = []
-    for source_path in sorted(discovered_paths, key=_sort_key):
-        manifest_page = manifest.pages[source_path]
-        parent_source_path = _parent_for(source_path, manifest_paths)
+    parent_by_path: dict[str, str | None] = {}
+    for source_path in discovered_paths:
+        parent_source_path = _parent_for(source_path, manifest)
         is_nested = PurePosixPath(source_path).parent.as_posix() not in ("", ".")
         if is_nested and parent_source_path is None:
             raise PlannerError(f"Cannot publish project: parent index.md missing for {source_path}")
+        if parent_source_path is not None and parent_source_path not in discovered:
+            raise PlannerError(
+                "Cannot publish project: parent page "
+                f"{parent_source_path} for {source_path} is not included in the publish plan"
+            )
+        parent_by_path[source_path] = parent_source_path
 
+    items: list[PlannedPage] = []
+    for source_path in _ordered_source_paths(discovered_paths, parent_by_path):
+        manifest_page = manifest.pages[source_path]
         absolute_path = project_root / source_path
         title = (
             manifest_page.title
@@ -157,7 +232,7 @@ def build_publish_plan(
                 page_id=manifest_page.page_id,
                 title=title,
                 url=manifest_page.url,
-                parent_source_path=parent_source_path,
+                parent_source_path=parent_by_path[source_path],
                 content_hash=manifest_page.content_hash,
                 last_synced_at=manifest_page.last_synced_at,
             )
@@ -175,6 +250,7 @@ def build_publish_plan(
             else allow_diagram_fallback
         ),
         space=manifest.space,
+        root_source_path=manifest.root_source_path,
         root_page_id=manifest.root_page_id,
         root_url=manifest.root_url,
         root_parent_page_id=manifest.root_parent_page_id,

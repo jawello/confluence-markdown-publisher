@@ -395,6 +395,88 @@ pages:
     assert page.last_synced_at == "2026-04-28T12:00:00Z"
 
 
+def test_load_manifest_reads_root_source_path_and_page_parent(tmp_path):
+    manifest_path = tmp_path / ".confluence-publish.yml"
+    manifest_path.write_text(
+        """
+root:
+  source_path: "00-overview.md"
+  parent_page_id: "5151786651"
+  page_id: "5156570282"
+pages:
+  00-overview.md:
+    title: "White-label NEXT Deployment - Overview"
+    page_id: "5156570282"
+  01-prerequisites.md:
+    title: "Prerequisites"
+    page_id: "5156602817"
+    parent: "00-overview.md"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    manifest = load_manifest(manifest_path)
+
+    assert manifest.root_source_path == "00-overview.md"
+    assert manifest.root_parent_page_id == "5151786651"
+    assert manifest.root_page_id == "5156570282"
+    assert manifest.pages["00-overview.md"].parent is None
+    assert manifest.pages["01-prerequisites.md"].parent == "00-overview.md"
+
+
+def test_load_manifest_rejects_root_source_path_missing_from_pages(tmp_path):
+    manifest_path = tmp_path / ".confluence-publish.yml"
+    manifest_path.write_text(
+        """
+root:
+  source_path: "00-overview.md"
+pages:
+  01-prerequisites.md:
+    page_id: "5156602817"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ManifestError, match="root.source_path.*00-overview.md.*pages"):
+        load_manifest(manifest_path)
+
+
+def test_load_manifest_rejects_page_parent_missing_from_pages(tmp_path):
+    manifest_path = tmp_path / ".confluence-publish.yml"
+    manifest_path.write_text(
+        """
+pages:
+  01-prerequisites.md:
+    page_id: "5156602817"
+    parent: "00-overview.md"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ManifestError, match="parent.*00-overview.md.*pages"):
+        load_manifest(manifest_path)
+
+
+def test_load_manifest_rejects_root_page_with_explicit_parent(tmp_path):
+    manifest_path = tmp_path / ".confluence-publish.yml"
+    manifest_path.write_text(
+        """
+root:
+  source_path: "00-overview.md"
+pages:
+  00-overview.md:
+    page_id: "5156570282"
+    parent: "01-prerequisites.md"
+  01-prerequisites.md:
+    page_id: "5156602817"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ManifestError, match="root.source_path.*must not define parent"):
+        load_manifest(manifest_path)
+
+
 def test_load_manifest_rejects_non_boolean_sync_setting(tmp_path):
     manifest_path = tmp_path / ".confluence-publish.yml"
     manifest_path.write_text(

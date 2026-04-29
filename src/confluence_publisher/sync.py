@@ -132,6 +132,10 @@ def prepare_sync_pages(plan: PublishPlan, *, mmdc_bin: str) -> dict[str, Prepare
 
 
 def _root_item(plan: PublishPlan) -> PlannedPage:
+    if plan.root_source_path is not None:
+        for item in plan.items:
+            if item.source_path == plan.root_source_path:
+                return item
     if plan.root_page_id is not None:
         for item in plan.items:
             if item.page_id == plan.root_page_id:
@@ -226,13 +230,16 @@ async def _create_page(
 def _parent_id_for(
     item: PlannedPage,
     *,
+    plan: PublishPlan,
     root_item: PlannedPage,
     page_ids: dict[str, str],
 ) -> str:
     if item.parent_source_path is not None:
         return page_ids[item.parent_source_path]
     if item.source_path == root_item.source_path:
-        raise RuntimeError("Root page parent must be supplied by root.parent_page_id")
+        if plan.root_parent_page_id is None:
+            raise RuntimeError("Root page parent must be supplied by root.parent_page_id")
+        return plan.root_parent_page_id
     return page_ids[root_item.source_path]
 
 
@@ -354,14 +361,14 @@ async def sync_project(plan: PublishPlan, *, client, dry_run: bool, mmdc_bin: st
     page_ids = {item.source_path: item.page_id for item in plan.items if item.page_id}
     if missing_pages:
         root_page_id = page_ids.get(root.source_path)
-        if root_page_id is None:
+        if root_page_id is None and root not in missing_pages:
             raise RuntimeError("Cannot create missing pages without a readable root page")
         create_items = _with_descendants(plan, missing_pages)
         for item in create_items:
             page_ids.pop(item.source_path, None)
         await _preflight_titles(plan, client=client, items=create_items)
         for item in create_items:
-            parent_id = _parent_id_for(item, root_item=root, page_ids=page_ids)
+            parent_id = _parent_id_for(item, plan=plan, root_item=root, page_ids=page_ids)
             page = await _create_page(
                 plan,
                 client=client,
@@ -416,7 +423,7 @@ async def _recreate_full_tree(plan: PublishPlan, *, client, dry_run: bool, mmdc_
     for item in plan.items:
         if item.source_path == root.source_path:
             continue
-        parent_id = _parent_id_for(item, root_item=root, page_ids=page_ids)
+        parent_id = _parent_id_for(item, plan=plan, root_item=root, page_ids=page_ids)
         page = await _create_page(
             plan,
             client=client,
@@ -459,7 +466,7 @@ async def _recreate_stale_pages(
     created_pages: dict[str, PageInfo] = {}
 
     for item in create_items:
-        parent_id = _parent_id_for(item, root_item=root, page_ids=page_ids)
+        parent_id = _parent_id_for(item, plan=plan, root_item=root, page_ids=page_ids)
         page = await _create_page(
             plan,
             client=client,
