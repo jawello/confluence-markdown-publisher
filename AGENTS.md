@@ -33,6 +33,14 @@ Run the full test suite before considering work complete:
 uv run pytest tests/confluence_publisher -v
 ```
 
+Measure coverage after behavior changes, bug fixes, or new features:
+
+```bash
+uv run pytest tests/confluence_publisher --cov=confluence_publisher --cov-report=term-missing
+```
+
+Coverage is informational, not a hard gate. The target is `90%` total coverage; the current observed baseline is `91%`.
+
 For whitespace checks:
 
 ```bash
