@@ -29,6 +29,22 @@ npm install -g @mermaid-js/mermaid-cli
 uv sync
 ```
 
+## Development
+
+Run the full test suite:
+
+```bash
+uv run pytest tests/confluence_publisher -v
+```
+
+Measure local test coverage:
+
+```bash
+uv run pytest tests/confluence_publisher --cov=confluence_publisher --cov-report=term-missing
+```
+
+Coverage is informational and not CI-enforced. The current observed baseline is `91%`; the project target is `90%` total coverage.
+
 ## Usage
 
 Preview conversion without publishing:
