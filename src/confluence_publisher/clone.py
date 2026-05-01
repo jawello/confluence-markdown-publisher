@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import Any
 from urllib.parse import unquote, urlparse
 
+import yaml
+
+from .bidirectional import compute_canonical_markdown_hash
 from .models import ConfluenceTreeNode, slugify
 
 
@@ -162,3 +166,75 @@ def build_clone_file_plan(root: ConfluenceTreeNode) -> CloneFilePlan:
 
     visit(root, PurePosixPath(""))
     return CloneFilePlan(root=root, pages=tuple(pages))
+
+
+@dataclass(frozen=True)
+class CloneContentPage:
+    markdown: str
+
+
+def _manifest_for_clone(
+    *,
+    space: str,
+    root_url: str | None,
+    file_plan: CloneFilePlan,
+    content: dict[str, CloneContentPage],
+) -> dict[str, Any]:
+    root_page = file_plan.pages[0]
+    manifest: dict[str, Any] = {
+        "space": space,
+        "sync": {"enabled": True},
+        "root": {
+            "source_path": "index.md",
+            "page_id": root_page.page_id,
+        },
+        "pages": {},
+    }
+    if root_url is not None:
+        manifest["root"]["url"] = root_url
+
+    pages_block: dict[str, dict[str, str]] = {}
+    for page in file_plan.pages:
+        converted = content.get(page.page_id)
+        if converted is None:
+            raise CloneError(f"Missing converted content for page {page.page_id}")
+        page_data = {
+            "title": page.title,
+            "page_id": page.page_id,
+            "canonical_hash": compute_canonical_markdown_hash(converted.markdown),
+        }
+        if page.url is not None:
+            page_data["url"] = page.url
+        pages_block[page.source_path] = page_data
+    manifest["pages"] = pages_block
+    return manifest
+
+
+def write_clone_project(
+    *,
+    output: Path,
+    space: str,
+    root_url: str | None,
+    file_plan: CloneFilePlan,
+    content: dict[str, CloneContentPage],
+) -> None:
+    assert_clone_output_safe(output)
+    manifest = _manifest_for_clone(
+        space=space,
+        root_url=root_url,
+        file_plan=file_plan,
+        content=content,
+    )
+    output.mkdir(parents=True, exist_ok=True)
+    for page in file_plan.pages:
+        converted = content.get(page.page_id)
+        if converted is None:
+            raise CloneError(f"Missing converted content for page {page.page_id}")
+        target = output / page.source_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(converted.markdown, encoding="utf-8")
+
+    (output / ".confluence-publish.yml").write_text(
+        yaml.safe_dump(manifest, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )

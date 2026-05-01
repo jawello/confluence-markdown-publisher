@@ -2,14 +2,18 @@ from pathlib import Path
 
 import pytest
 
+from confluence_publisher.bidirectional import compute_canonical_markdown_hash
 from confluence_publisher.clone import (
+    CloneContentPage,
     CloneError,
     CloneRequest,
     assert_clone_output_safe,
     build_clone_file_plan,
     parse_clone_request,
     parse_confluence_page_url,
+    write_clone_project,
 )
+from confluence_publisher.manifest import load_manifest
 from confluence_publisher.models import ConfluenceTreeNode
 
 
@@ -185,3 +189,58 @@ def test_build_clone_file_plan_makes_duplicate_leaf_slugs_unique():
         ("2", "overview.md"),
         ("3", "overview-2.md"),
     ]
+
+
+def test_write_clone_project_creates_markdown_and_manifest(tmp_path):
+    tree = ConfluenceTreeNode(
+        page_id="1",
+        title="Root Docs",
+        url="https://example.atlassian.net/wiki/spaces/ENG/pages/1/Root",
+        children=(ConfluenceTreeNode(page_id="2", title="Guide", url=None),),
+    )
+    file_plan = build_clone_file_plan(tree)
+    content = {
+        "1": CloneContentPage(markdown="# Root Docs\n\nWelcome.\n"),
+        "2": CloneContentPage(markdown="# Guide\n\nRead this.\n"),
+    }
+
+    write_clone_project(
+        output=tmp_path / "docs",
+        space="ENG",
+        root_url=tree.url,
+        file_plan=file_plan,
+        content=content,
+    )
+
+    assert (tmp_path / "docs" / "index.md").read_text(encoding="utf-8") == (
+        "# Root Docs\n\nWelcome.\n"
+    )
+    assert (tmp_path / "docs" / "guide.md").read_text(encoding="utf-8") == (
+        "# Guide\n\nRead this.\n"
+    )
+    manifest = load_manifest(tmp_path / "docs" / ".confluence-publish.yml")
+    assert manifest.space == "ENG"
+    assert manifest.sync.enabled is True
+    assert manifest.root_source_path == "index.md"
+    assert manifest.root_page_id == "1"
+    assert manifest.root_url == tree.url
+    assert manifest.pages["index.md"].canonical_hash == compute_canonical_markdown_hash(
+        "# Root Docs\n\nWelcome.\n"
+    )
+    assert manifest.pages["guide.md"].canonical_hash == compute_canonical_markdown_hash(
+        "# Guide\n\nRead this.\n"
+    )
+
+
+def test_write_clone_project_refuses_missing_content(tmp_path):
+    tree = ConfluenceTreeNode(page_id="1", title="Root Docs")
+    file_plan = build_clone_file_plan(tree)
+
+    with pytest.raises(CloneError, match="Missing converted content for page 1"):
+        write_clone_project(
+            output=tmp_path / "docs",
+            space="ENG",
+            root_url=None,
+            file_plan=file_plan,
+            content={},
+        )
