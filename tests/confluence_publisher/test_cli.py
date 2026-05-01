@@ -96,6 +96,23 @@ def test_arg_parser_accepts_clone_subcommand(tmp_path):
     assert args.dry_run is True
 
 
+def test_arg_parser_preserves_root_dry_run_for_clone_subcommand(tmp_path):
+    args = build_arg_parser().parse_args(
+        [
+            "--dry-run",
+            "clone",
+            "--url",
+            "https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/"
+            "pages/5164564861/Custom+UI+NEXT+Migration",
+            "--output",
+            str(tmp_path / "docs"),
+        ]
+    )
+
+    assert args.command == "clone"
+    assert args.dry_run is True
+
+
 def test_validate_args_rejects_source_and_project_together():
     args = build_arg_parser().parse_args(
         ["--source", "page.md", "--page-id", "111111", "--project", "docs"]
@@ -225,6 +242,44 @@ async def test_run_async_clone_dispatches_to_clone_flow(tmp_path, monkeypatch, c
             client,
         )
     ]
+    assert "Confluence clone dry run" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_run_async_clone_preserves_root_dry_run(tmp_path, monkeypatch, capsys):
+    calls = []
+
+    async def fake_clone_confluence_tree(request, *, client):
+        calls.append(request.dry_run)
+        from confluence_publisher.clone import CloneResult, build_clone_file_plan
+        from confluence_publisher.models import ConfluenceTreeNode
+
+        tree = ConfluenceTreeNode(page_id=request.root_page_id, title="Root")
+        return CloneResult(
+            output=request.output,
+            page_count=1,
+            file_plan=build_clone_file_plan(tree),
+            written=not request.dry_run,
+        )
+
+    client = FakeClient()
+    monkeypatch.setattr(cli, "connect_mcp_atlassian", fake_connect_for(client))
+    monkeypatch.setattr(cli, "clone_confluence_tree", fake_clone_confluence_tree)
+
+    result = await cli.run_async(
+        [
+            "--dry-run",
+            "clone",
+            "--url",
+            "https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/"
+            "pages/5164564861/Custom+UI+NEXT+Migration",
+            "--output",
+            str(tmp_path / "docs"),
+        ]
+    )
+
+    assert result == 0
+    assert calls == [True]
     assert "Confluence clone dry run" in capsys.readouterr().out
 
 

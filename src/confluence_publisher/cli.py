@@ -99,7 +99,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     clone_parser.add_argument("--output", dest="clone_output", type=Path, required=True)
     clone_parser.add_argument("--max-depth", dest="clone_max_depth", type=int)
     clone_parser.add_argument("--max-pages", dest="clone_max_pages", type=int, default=1000)
-    clone_parser.add_argument("--dry-run", action="store_true")
+    clone_parser.add_argument("--dry-run", action="store_true", default=argparse.SUPPRESS)
     return parser
 
 
