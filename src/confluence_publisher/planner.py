@@ -20,6 +20,7 @@ class PlannedPage:
     url: str | None
     parent_source_path: str | None
     content_hash: str | None = None
+    canonical_hash: str | None = None
     last_synced_at: str | None = None
 
 
@@ -234,6 +235,7 @@ def build_publish_plan(
                 url=manifest_page.url,
                 parent_source_path=parent_by_path[source_path],
                 content_hash=manifest_page.content_hash,
+                canonical_hash=manifest_page.canonical_hash,
                 last_synced_at=manifest_page.last_synced_at,
             )
         )

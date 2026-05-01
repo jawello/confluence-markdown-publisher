@@ -210,6 +210,54 @@ Use `--plan-only` to inspect the effective sync settings without rendering, conn
 
 Sync mode does not delete, move, or reorder Confluence pages. Confluence page titles are unique within a space, so title collisions fail before creation and must be resolved in the manifest.
 
+### Bidirectional Sync Checks
+
+Project mode can compare local Markdown with the current Confluence page body:
+
+```bash
+uv run publish-confluence \
+  --project docs \
+  --check-sync
+```
+
+`--check-sync` reads each mapped Confluence page, converts supported Confluence storage XHTML back to canonical Markdown, and compares it with the local Markdown file. It does not render diagrams, write local files, or update Confluence. The command exits with a non-zero status when it detects unsupported remote content, unknown divergence, or a local/remote conflict.
+
+The reverse conversion currently supports the publisher-owned subset:
+
+- headings, paragraphs, ordered and unordered lists;
+- bold, italic, inline code, and links;
+- code macros;
+- Mermaid image plus collapsed "Mermaid source" blocks;
+- warning, note, info, and tip panels;
+- Confluence task lists;
+- simple tables;
+- publisher-generated TOC macros.
+
+Remote macros outside this subset are reported as unsupported instead of being converted silently.
+
+To pull safe remote-only changes back into Markdown:
+
+```bash
+uv run publish-confluence \
+  --project docs \
+  --pull \
+  --dry-run
+```
+
+Remove `--dry-run` and add `--yes` to update local Markdown files. Pull mode only writes pages whose local content still matches the stored `canonical_hash` baseline and whose remote content changed. It refuses to overwrite local changes, unknown divergence, or unsupported remote content.
+
+Successful project sync updates now also store a per-page `canonical_hash` in `.confluence-publish.yml`. This hash is the baseline used by later bidirectional checks:
+
+```yaml
+pages:
+  index.md:
+    page_id: "111111"
+    title: "Project Documentation"
+    content_hash: "sha256:..."
+    canonical_hash: "sha256:..."
+    last_synced_at: "2026-04-28T12:00:00Z"
+```
+
 Publish with a version comment:
 
 ```bash

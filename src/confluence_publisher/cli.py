@@ -61,6 +61,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--plan-only", action="store_true")
     parser.add_argument("--create-missing-pages", action="store_true")
     parser.add_argument("--sync", action="store_true")
+    parser.add_argument("--check-sync", action="store_true")
+    parser.add_argument("--pull", action="store_true")
     parser.add_argument("--recreate-missing-root", action="store_true")
     parser.add_argument("--recreate-stale-pages", action="store_true")
     parser.add_argument("--comment")
@@ -97,6 +99,10 @@ def validate_args(args: argparse.Namespace) -> None:
             raise SystemExit("--create-missing-pages is only supported with --project")
         if args.sync:
             raise SystemExit("--sync is only supported with --project")
+        if args.check_sync:
+            raise SystemExit("--check-sync is only supported with --project")
+        if args.pull:
+            raise SystemExit("--pull is only supported with --project")
         if args.recreate_missing_root:
             raise SystemExit("--recreate-missing-root is only supported with --project")
         if args.recreate_stale_pages:
@@ -106,6 +112,8 @@ def validate_args(args: argparse.Namespace) -> None:
             raise SystemExit("--page-id is not supported with --project")
         if args.title:
             raise SystemExit("--title is not supported with --project")
+        if args.check_sync and args.pull:
+            raise SystemExit("--check-sync and --pull are mutually exclusive")
 
 
 def build_preview(
@@ -225,6 +233,11 @@ async def publish_single_page(
 
 async def run_project_mode(args: argparse.Namespace) -> int:
     from .batch import format_publish_plan, publish_project
+    from .bidirectional import (
+        check_project_invariants,
+        format_invariant_report,
+        pull_remote_changes,
+    )
     from .sync import sync_project
 
     manifest_path = args.manifest or args.project / ".confluence-publish.yml"
@@ -236,6 +249,8 @@ async def run_project_mode(args: argparse.Namespace) -> int:
         sync_enabled = (
             manifest.sync.enabled
             or args.sync
+            or args.check_sync
+            or args.pull
             or args.recreate_missing_root
             or args.recreate_stale_pages
         )
@@ -274,6 +289,28 @@ async def run_project_mode(args: argparse.Namespace) -> int:
 
     if args.plan_only:
         return 0
+
+    if args.check_sync or args.pull:
+        if args.pull and not args.dry_run and not args.yes:
+            answer = input(
+                "Pull remote Confluence changes into local Markdown? "
+                "Type 'yes' to continue: "
+            )
+            if answer != "yes":
+                print("Aborted.")
+                return 1
+
+        async with connect_mcp_atlassian() as client:
+            if args.check_sync:
+                report = await check_project_invariants(plan, client=client)
+                print(format_invariant_report(report))
+                return 1 if report.has_conflicts else 0
+
+            result = await pull_remote_changes(plan, client=client, dry_run=args.dry_run)
+            print(format_invariant_report(result.report))
+            pulled = ", ".join(result.updated_paths) if result.updated_paths else "none"
+            print(f"Remote pages to pull: {pulled}")
+            return 0
 
     if args.dry_run:
         class DryRunClient:

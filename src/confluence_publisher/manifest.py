@@ -61,6 +61,7 @@ class ManifestPage:
     title: str | None = None
     url: str | None = None
     content_hash: str | None = None
+    canonical_hash: str | None = None
     last_synced_at: str | None = None
     parent: str | None = None
 
@@ -77,6 +78,7 @@ class ManifestPageSyncState:
     page_id: str | None = None
     url: str | None = None
     content_hash: str | None = None
+    canonical_hash: str | None = None
     last_synced_at: str | None = None
 
 
@@ -342,6 +344,10 @@ def load_manifest(path: Path, *, allow_missing_page_ids: bool = False) -> Projec
             page_data.get("content_hash"),
             f"pages.{page_path}.content_hash",
         )
+        canonical_hash = _optional_str(
+            page_data.get("canonical_hash"),
+            f"pages.{page_path}.canonical_hash",
+        )
         last_synced_at = _optional_str(
             page_data.get("last_synced_at"),
             f"pages.{page_path}.last_synced_at",
@@ -360,6 +366,7 @@ def load_manifest(path: Path, *, allow_missing_page_ids: bool = False) -> Projec
             title=title,
             url=url,
             content_hash=content_hash,
+            canonical_hash=canonical_hash,
             last_synced_at=last_synced_at,
             parent=parent,
         )
@@ -475,6 +482,8 @@ def write_manifest_sync_state(
             page_data["url"] = state.url
         if state.content_hash is not None:
             page_data["content_hash"] = state.content_hash
+        if state.canonical_hash is not None:
+            page_data["canonical_hash"] = state.canonical_hash
         if state.last_synced_at is not None:
             page_data["last_synced_at"] = state.last_synced_at
 

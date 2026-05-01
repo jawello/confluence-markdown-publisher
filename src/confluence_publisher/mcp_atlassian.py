@@ -10,7 +10,7 @@ from typing import Any, Protocol
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from .models import PageInfo
+from .models import PageInfo, PageStorage
 
 REQUIRED_TOOLS = (
     "confluence_search",
@@ -157,6 +157,40 @@ def _page_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _storage_value(payload: dict[str, Any]) -> str | None:
+    body = payload.get("body")
+    if isinstance(body, dict):
+        storage = body.get("storage")
+        if isinstance(storage, dict):
+            value = storage.get("value")
+            if isinstance(value, str):
+                return value
+        value = body.get("value")
+        if isinstance(value, str):
+            return value
+
+    for key in ("storage", "content"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            return value
+        if isinstance(value, dict):
+            nested = value.get("value")
+            if isinstance(nested, str):
+                return nested
+    return None
+
+
+def _version_number(payload: dict[str, Any]) -> int | None:
+    version = payload.get("version")
+    if isinstance(version, dict):
+        number = version.get("number")
+        if isinstance(number, int):
+            return number
+        if isinstance(number, str) and number.isdigit():
+            return int(number)
+    return None
+
+
 def _raise_payload_error(payload: dict[str, Any], tool_name: str) -> None:
     error = payload.get("error")
     if isinstance(error, str) and error:
@@ -195,6 +229,33 @@ class McpAtlassianClient:
         return PageInfo(
             page_id=str(page_payload.get("id", page_id)),
             title=title,
+            url=_page_url(page_payload) or _page_url(payload),
+        )
+
+    async def get_page_storage(self, page_id: str) -> PageStorage:
+        result = await self.session.call_tool(
+            "confluence_get_page",
+            {
+                "page_id": page_id,
+                "include_metadata": True,
+                "convert_to_markdown": False,
+                "include_content": True,
+            },
+        )
+        payload = _structured_content(result)
+        _raise_payload_error(payload, "confluence_get_page")
+        page_payload = _page_payload(payload)
+        title = page_payload.get("title")
+        if not isinstance(title, str) or not title:
+            raise McpToolError(f"confluence_get_page returned no title for page {page_id}")
+        storage = _storage_value(page_payload) or _storage_value(payload)
+        if storage is None:
+            raise McpToolError(f"confluence_get_page returned no storage body for page {page_id}")
+        return PageStorage(
+            page_id=str(page_payload.get("id", page_id)),
+            title=title,
+            storage=storage,
+            version=_version_number(page_payload) or _version_number(payload),
             url=_page_url(page_payload) or _page_url(payload),
         )
 

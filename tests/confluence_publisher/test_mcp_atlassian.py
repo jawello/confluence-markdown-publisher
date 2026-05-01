@@ -146,6 +146,50 @@ async def test_client_gets_page_info():
 
 
 @pytest.mark.asyncio
+async def test_client_gets_page_storage_with_version_metadata():
+    session = FakeMcpSession(
+        page_result={
+            "structuredContent": {
+                "page": {
+                    "id": "5151854234",
+                    "title": "Test",
+                    "body": {"storage": {"value": "<h1>Test</h1>"}},
+                    "version": {"number": 7},
+                }
+            }
+        }
+    )
+    client = McpAtlassianClient(session)
+
+    page = await client.get_page_storage("5151854234")
+
+    assert page.page_id == "5151854234"
+    assert page.title == "Test"
+    assert page.storage == "<h1>Test</h1>"
+    assert page.version == 7
+    assert session.calls == [
+        (
+            "confluence_get_page",
+            {
+                "page_id": "5151854234",
+                "include_metadata": True,
+                "convert_to_markdown": False,
+                "include_content": True,
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_client_get_page_storage_rejects_missing_storage_body():
+    session = FakeMcpSession(page_result={"structuredContent": {"id": "5151854234", "title": "Test"}})
+    client = McpAtlassianClient(session)
+
+    with pytest.raises(McpToolError, match="returned no storage body"):
+        await client.get_page_storage("5151854234")
+
+
+@pytest.mark.asyncio
 async def test_client_get_page_reads_url_from_links_payload():
     session = FakeMcpSession(
         page_result={

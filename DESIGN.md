@@ -59,7 +59,9 @@ The CLI orchestrates the whole publish operation. Most modules are intentionally
 | `planner.py` | Build validated project publish plans from discovered files and manifest pages. |
 | `batch.py` | Execute project publish plans by reusing the single-page publishing pipeline. |
 | `sync.py` | Reconcile manifest state with readable Confluence pages, recreate missing pages when policy allows it, and skip unchanged content by hash. |
+| `bidirectional.py` | Compare local Markdown with remote Confluence storage through canonical Markdown hashes and safely pull remote-only changes. |
 | `converter.py` | Find fenced code blocks, collect Mermaid metadata, convert Markdown to storage-ready HTML fragments. |
+| `storage_to_markdown.py` | Convert the supported Confluence storage subset back to canonical Markdown for sync checks. |
 | `renderer.py` | Call `mmdc` and validate that a rendered output file was produced. |
 | `storage.py` | Build Confluence storage macros for code, images, expand blocks, fallback panels, and TOC. |
 | `mcp_atlassian.py` | Start `mcp-atlassian` through `uvx` and call the Confluence MCP tools. |
@@ -193,9 +195,43 @@ Live sync flow:
 
 The content hash includes the page title, generated storage XHTML, output format, diagram width, fallback policy, and a hash schema version. This is intentionally local-state based; the tool does not read remote page bodies to reconstruct hashes.
 
+After a successful sync update, the manifest also receives a `canonical_hash` for the local Markdown. This hash is separate from `content_hash`: `content_hash` protects the generated storage update path, while `canonical_hash` is the baseline used by bidirectional checks and pull conflict detection.
+
 `--plan-only` stops after plan validation and never renders, connects to MCP, creates pages, or writes the manifest. `--dry-run` renders local storage previews through the sync path without connecting to MCP or writing the manifest.
 
 Sync recovery does not delete orphaned Confluence pages, empty trash, move existing pages, or repair remote tree relationships for readable pages. Those operations stay manual because they are destructive or ambiguous in shared Confluence spaces.
+
+## Bidirectional Sync Target
+
+Bidirectional sync is implemented conservatively as a check/pull layer on top of project manifests.
+
+```bash
+publish-confluence --project docs --check-sync
+publish-confluence --project docs --pull --dry-run
+publish-confluence --project docs --pull --yes
+```
+
+`--check-sync` reads the remote storage body for each mapped page, converts the supported storage subset back to canonical Markdown, hashes it, and compares it with the local Markdown hash and the stored `canonical_hash` baseline. It does not write local files or Confluence pages.
+
+`--pull` uses the same comparison but writes local Markdown only for remote-only changes. A page is safe to pull when:
+
+- the remote storage converts without unsupported macros;
+- the page has a stored `canonical_hash`;
+- the local Markdown still matches that baseline;
+- the remote canonical hash differs from the baseline.
+
+Pull mode refuses unknown divergence, local-only changes, local/remote conflicts, and unsupported remote storage. This avoids silently overwriting local edits or losing unsupported Confluence content.
+
+Supported reverse-conversion constructs are intentionally limited to the publisher-owned subset:
+
+- headings, paragraphs, lists, simple tables, bold, italic, inline code, and links;
+- Confluence code macros;
+- Mermaid image macros followed by collapsed "Mermaid source" code blocks;
+- warning, note, info, and tip panels;
+- Confluence task lists;
+- generated TOC macros, which are ignored during reverse conversion.
+
+Unsupported macros are reported in the check result instead of being converted to approximate Markdown.
 
 ## Mermaid Handling
 
@@ -270,6 +306,7 @@ Runtime publishing uses:
 
 - `confluence_get_page` when `--title` is omitted in live mode
 - `confluence_get_page` and `confluence_search` for sync preflight validation
+- `confluence_get_page` with content included for bidirectional sync checks and pull
 - `confluence_create_page` for explicit missing-page creation and sync recovery
 - `confluence_upload_attachment` for rendered diagrams
 - `confluence_update_page` for the final storage-format page body

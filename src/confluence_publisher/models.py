@@ -43,3 +43,12 @@ class PageInfo:
     page_id: str
     title: str
     url: str | None = None
+
+
+@dataclass(frozen=True)
+class PageStorage:
+    page_id: str
+    title: str
+    storage: str
+    version: int | None = None
+    url: str | None = None

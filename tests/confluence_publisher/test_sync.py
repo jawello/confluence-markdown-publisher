@@ -7,6 +7,7 @@ from confluence_publisher.mcp_atlassian import McpToolError
 from confluence_publisher.models import PageInfo
 from confluence_publisher.models import RenderedDiagram
 from confluence_publisher.planner import PlannedPage, PublishPlan
+from confluence_publisher.bidirectional import compute_canonical_markdown_hash
 from confluence_publisher.sync import (
     CONTENT_HASH_VERSION,
     PreparedSyncPage,
@@ -558,6 +559,9 @@ pages:
     assert ("update_page_storage", "111111", "Home", "Sync docs") in client.calls
     manifest = load_manifest(manifest_path)
     assert manifest.pages["index.md"].content_hash.startswith("sha256:")
+    assert manifest.pages["index.md"].canonical_hash == compute_canonical_markdown_hash(
+        "# Home\n\nChanged text.\n"
+    )
     assert (
         manifest.pages["index.md"].content_hash
         != "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

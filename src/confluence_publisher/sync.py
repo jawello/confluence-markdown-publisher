@@ -12,6 +12,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from .cli import _prepare_single_page
+from .bidirectional import compute_canonical_markdown_hash
 from .manifest import ManifestPageSyncState, write_manifest_sync_state
 from .mcp_atlassian import McpToolError
 from .models import PageInfo, RenderedDiagram
@@ -533,6 +534,9 @@ async def _publish_prepared_sync_pages(
                     if created
                     else prepared.item.url,
                     content_hash=prepared.content_hash,
+                    canonical_hash=compute_canonical_markdown_hash(
+                        prepared.item.absolute_path.read_text(encoding="utf-8")
+                    ),
                     last_synced_at=synced_at,
                 )
             },

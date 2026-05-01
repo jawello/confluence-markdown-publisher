@@ -6,7 +6,7 @@ import pytest
 from confluence_publisher import cli
 from confluence_publisher.cli import build_arg_parser, build_preview
 from confluence_publisher.manifest import load_manifest
-from confluence_publisher.models import PageInfo, RenderedDiagram
+from confluence_publisher.models import PageInfo, PageStorage, RenderedDiagram
 
 
 def test_arg_parser_defaults_to_svg_and_mcp_backend():
@@ -59,6 +59,18 @@ def test_arg_parser_accepts_sync_flags():
     assert args.recreate_stale_pages is True
 
 
+def test_arg_parser_accepts_bidirectional_flags():
+    parser = cli.build_arg_parser()
+
+    check_args = parser.parse_args(["--project", "docs", "--check-sync"])
+    pull_args = parser.parse_args(["--project", "docs", "--pull"])
+
+    assert check_args.check_sync is True
+    assert check_args.pull is False
+    assert pull_args.check_sync is False
+    assert pull_args.pull is True
+
+
 def test_validate_args_rejects_source_and_project_together():
     args = build_arg_parser().parse_args(
         ["--source", "page.md", "--page-id", "111111", "--project", "docs"]
@@ -88,6 +100,8 @@ def test_validate_args_rejects_page_id_in_project_mode():
         ("--sync", "--sync"),
         ("--recreate-missing-root", "--recreate-missing-root"),
         ("--recreate-stale-pages", "--recreate-stale-pages"),
+        ("--check-sync", "--check-sync"),
+        ("--pull", "--pull"),
     ],
 )
 def test_validate_args_rejects_sync_flags_in_source_mode(flag, expected):
@@ -96,6 +110,13 @@ def test_validate_args_rejects_sync_flags_in_source_mode(flag, expected):
     )
 
     with pytest.raises(SystemExit, match=expected):
+        cli.validate_args(args)
+
+
+def test_validate_args_rejects_check_sync_and_pull_together():
+    args = cli.build_arg_parser().parse_args(["--project", "docs", "--check-sync", "--pull"])
+
+    with pytest.raises(SystemExit, match="--check-sync and --pull are mutually exclusive"):
         cli.validate_args(args)
 
 
@@ -145,6 +166,15 @@ class FakeClient:
     async def get_page(self, page_id: str) -> PageInfo:
         self.calls.append(("get_page", page_id))
         return PageInfo(page_id=page_id, title=self.title)
+
+    async def get_page_storage(self, page_id: str) -> PageStorage:
+        self.calls.append(("get_page_storage", page_id))
+        return PageStorage(
+            page_id=page_id,
+            title=self.title,
+            storage="<h1>Home</h1><p>Remote text.</p>",
+            version=3,
+        )
 
     async def create_page(
         self,
@@ -512,6 +542,60 @@ pages:
     output = capsys.readouterr().out
     assert "Sync: enabled" in output
     assert "Recreate missing root: yes" in output
+
+
+@pytest.mark.asyncio
+async def test_run_async_project_check_sync_reads_remote_storage(
+    tmp_path, monkeypatch, capsys
+):
+    (tmp_path / "index.md").write_text("# Home\n\nRemote text.\n", encoding="utf-8")
+    (tmp_path / ".confluence-publish.yml").write_text(
+        """
+pages:
+  index.md:
+    page_id: "111111"
+    title: "Home"
+""".strip(),
+        encoding="utf-8",
+    )
+    client = FakeClient()
+    monkeypatch.setattr(cli, "connect_mcp_atlassian", fake_connect_for(client))
+
+    result = await cli.run_async(["--project", str(tmp_path), "--check-sync"])
+
+    assert result == 0
+    assert client.calls == [("get_page_storage", "111111")]
+    output = capsys.readouterr().out
+    assert "Confluence bidirectional sync check" in output
+    assert "index.md: in_sync" in output
+
+
+@pytest.mark.asyncio
+async def test_run_async_project_pull_dry_run_reads_remote_but_does_not_write(
+    tmp_path, monkeypatch, capsys
+):
+    (tmp_path / "index.md").write_text("# Home\n\nBase text.\n", encoding="utf-8")
+    baseline = "sha256:d8f52ec520ffada82e3a0218191af05b65c407a0f8e1e3f691ec9e829ed1d780"
+    (tmp_path / ".confluence-publish.yml").write_text(
+        f"""
+pages:
+  index.md:
+    page_id: "111111"
+    title: "Home"
+    canonical_hash: "{baseline}"
+""".strip(),
+        encoding="utf-8",
+    )
+    client = FakeClient()
+    monkeypatch.setattr(cli, "connect_mcp_atlassian", fake_connect_for(client))
+
+    result = await cli.run_async(["--project", str(tmp_path), "--pull", "--dry-run"])
+
+    assert result == 0
+    assert client.calls == [("get_page_storage", "111111")]
+    assert (tmp_path / "index.md").read_text(encoding="utf-8") == "# Home\n\nBase text.\n"
+    output = capsys.readouterr().out
+    assert "Remote pages to pull: index.md" in output
 
 
 @pytest.mark.asyncio

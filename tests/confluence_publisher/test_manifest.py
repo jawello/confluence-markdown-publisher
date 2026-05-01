@@ -392,7 +392,28 @@ pages:
     assert manifest.root_page_id == "5155097071"
     page = manifest.pages["00-overview.md"]
     assert page.content_hash == "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    assert page.canonical_hash is None
     assert page.last_synced_at == "2026-04-28T12:00:00Z"
+
+
+def test_load_manifest_reads_page_canonical_hash(tmp_path):
+    manifest_path = tmp_path / ".confluence-publish.yml"
+    manifest_path.write_text(
+        """
+pages:
+  index.md:
+    page_id: "111111"
+    canonical_hash: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    manifest = load_manifest(manifest_path)
+
+    assert (
+        manifest.pages["index.md"].canonical_hash
+        == "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    )
 
 
 def test_load_manifest_reads_root_source_path_and_page_parent(tmp_path):
@@ -526,6 +547,7 @@ pages:
                 page_id="new-guide",
                 url="https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/pages/new-guide/Guide",
                 content_hash="sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                canonical_hash="sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
                 last_synced_at="2026-04-28T13:00:00Z",
             ),
         },
@@ -539,6 +561,10 @@ pages:
     assert manifest.pages["00-overview.md"].page_id == "new-root"
     assert manifest.pages["guide/index.md"].page_id == "new-guide"
     assert manifest.pages["guide/index.md"].content_hash.startswith("sha256:")
+    assert (
+        manifest.pages["guide/index.md"].canonical_hash
+        == "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    )
     assert manifest.pages["guide/index.md"].last_synced_at == "2026-04-28T13:00:00Z"
 
 
