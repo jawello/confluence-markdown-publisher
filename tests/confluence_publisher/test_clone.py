@@ -393,6 +393,10 @@ async def test_clone_confluence_tree_dry_run_writes_nothing(tmp_path):
 
     assert result.written is False
     assert not (tmp_path / "docs").exists()
+    assert client.calls == [
+        ("get_page_tree", "1", 2, 50),
+        ("get_page_storage", "1"),
+    ]
 
 
 @pytest.mark.asyncio
