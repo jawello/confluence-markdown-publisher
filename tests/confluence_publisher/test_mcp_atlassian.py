@@ -11,6 +11,7 @@ from confluence_publisher.mcp_atlassian import (
     _structured_content,
     build_server_command,
 )
+from confluence_publisher.models import ConfluenceTreeNode
 
 
 def test_build_server_command_limits_enabled_tools_and_version():
@@ -327,6 +328,112 @@ async def test_client_get_page_raises_fastmcp_wrapped_json_error_message():
 
     with pytest.raises(McpToolError, match="no access"):
         await client.get_page("5155096957")
+
+
+@pytest.mark.asyncio
+async def test_client_gets_page_children():
+    session = FakeMcpSession(
+        page_result={
+            "structuredContent": {
+                "id": "1",
+                "title": "Root",
+                "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/1/Root",
+            }
+        }
+    )
+    session.children_results = {
+        "1": {
+            "structuredContent": {
+                "parent_id": "1",
+                "count": 1,
+                "results": [
+                    {
+                        "id": "2",
+                        "title": "Child",
+                        "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/2/Child",
+                    }
+                ],
+            }
+        }
+    }
+
+    async def call_tool(name, arguments):
+        session.calls.append((name, arguments))
+        if name == "confluence_get_page_children":
+            return session.children_results[arguments["parent_id"]]
+        return await FakeMcpSession.call_tool(session, name, arguments)
+
+    session.call_tool = call_tool
+    client = McpAtlassianClient(session)
+
+    children = await client.get_page_children("1")
+
+    assert children == (
+        ConfluenceTreeNode(
+            page_id="2",
+            title="Child",
+            url="https://example.atlassian.net/wiki/spaces/ENG/pages/2/Child",
+        ),
+    )
+    assert session.calls[-1] == (
+        "confluence_get_page_children",
+        {
+            "parent_id": "1",
+            "expand": "version",
+            "limit": 50,
+            "include_content": False,
+            "convert_to_markdown": False,
+            "start": 0,
+            "include_folders": False,
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_client_get_page_tree_recurses_with_limits():
+    pages = {
+        "1": {"id": "1", "title": "Root", "url": "https://example/pages/1/Root"},
+        "2": {"id": "2", "title": "Child", "url": "https://example/pages/2/Child"},
+        "3": {"id": "3", "title": "Grandchild", "url": "https://example/pages/3/Grandchild"},
+    }
+    children = {
+        "1": [pages["2"]],
+        "2": [pages["3"]],
+        "3": [],
+    }
+
+    class TreeSession(FakeMcpSession):
+        async def call_tool(self, name, arguments):
+            self.calls.append((name, arguments))
+            if name == "confluence_get_page":
+                return {"structuredContent": pages[arguments["page_id"]]}
+            if name == "confluence_get_page_children":
+                return {
+                    "structuredContent": {
+                        "parent_id": arguments["parent_id"],
+                        "count": len(children[arguments["parent_id"]]),
+                        "results": children[arguments["parent_id"]],
+                    }
+                }
+            raise AssertionError(name)
+
+    session = TreeSession()
+    client = McpAtlassianClient(session)
+
+    tree = await client.get_page_tree("1", max_depth=1, max_pages=10)
+
+    assert tree == ConfluenceTreeNode(
+        page_id="1",
+        title="Root",
+        url="https://example/pages/1/Root",
+        children=(
+            ConfluenceTreeNode(
+                page_id="2",
+                title="Child",
+                url="https://example/pages/2/Child",
+            ),
+        ),
+    )
 
 
 @pytest.mark.asyncio

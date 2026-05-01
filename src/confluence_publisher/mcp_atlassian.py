@@ -10,11 +10,12 @@ from typing import Any, Protocol
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from .models import PageInfo, PageStorage
+from .models import ConfluenceTreeNode, PageInfo, PageStorage
 
 REQUIRED_TOOLS = (
     "confluence_search",
     "confluence_get_page",
+    "confluence_get_page_children",
     "confluence_get_attachments",
     "confluence_create_page",
     "confluence_upload_attachment",
@@ -149,6 +150,25 @@ def _page_infos(payload: object, tool_name: str) -> list[PageInfo]:
     return pages
 
 
+def _tree_nodes(payload: object, tool_name: str) -> tuple[ConfluenceTreeNode, ...]:
+    if isinstance(payload, dict) and isinstance(payload.get("results"), list):
+        payload = payload["results"]
+    if not isinstance(payload, list):
+        raise McpToolError(f"{tool_name} returned no child page list")
+    nodes = []
+    for item in payload:
+        if not isinstance(item, dict):
+            raise McpToolError(f"{tool_name} returned invalid child page item")
+        page_id = item.get("id")
+        title = item.get("title")
+        if page_id is None or str(page_id) == "" or not isinstance(title, str) or not title:
+            raise McpToolError(f"{tool_name} returned invalid child page item")
+        nodes.append(
+            ConfluenceTreeNode(page_id=str(page_id), title=title, url=_page_url(item))
+        )
+    return tuple(nodes)
+
+
 def _page_payload(payload: dict[str, Any]) -> dict[str, Any]:
     for key in ("page", "metadata"):
         nested = payload.get(key)
@@ -258,6 +278,60 @@ class McpAtlassianClient:
             version=_version_number(page_payload) or _version_number(payload),
             url=_page_url(page_payload) or _page_url(payload),
         )
+
+    async def get_page_children(self, page_id: str) -> tuple[ConfluenceTreeNode, ...]:
+        result = await self.session.call_tool(
+            "confluence_get_page_children",
+            {
+                "parent_id": page_id,
+                "expand": "version",
+                "limit": 50,
+                "include_content": False,
+                "convert_to_markdown": False,
+                "start": 0,
+                "include_folders": False,
+            },
+        )
+        payload = _result_payload(result)
+        if isinstance(payload, dict):
+            _raise_payload_error(payload, "confluence_get_page_children")
+        return _tree_nodes(payload, "confluence_get_page_children")
+
+    async def get_page_tree(
+        self,
+        page_id: str,
+        *,
+        max_depth: int | None,
+        max_pages: int,
+    ) -> ConfluenceTreeNode:
+        seen: set[str] = set()
+
+        async def visit(current_page_id: str, depth: int) -> ConfluenceTreeNode:
+            if len(seen) >= max_pages:
+                raise McpToolError(f"Confluence page tree exceeds --max-pages {max_pages}")
+            if current_page_id in seen:
+                raise McpToolError(
+                    f"Confluence page tree contains duplicate page {current_page_id}"
+                )
+            seen.add(current_page_id)
+            page = await self.get_page(current_page_id)
+            if max_depth is not None and depth >= max_depth:
+                return ConfluenceTreeNode(
+                    page_id=page.page_id,
+                    title=page.title,
+                    url=page.url,
+                )
+            children = []
+            for child in await self.get_page_children(current_page_id):
+                children.append(await visit(child.page_id, depth + 1))
+            return ConfluenceTreeNode(
+                page_id=page.page_id,
+                title=page.title,
+                url=page.url,
+                children=tuple(children),
+            )
+
+        return await visit(page_id, 0)
 
     async def create_page(
         self,
