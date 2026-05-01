@@ -400,6 +400,28 @@ async def test_clone_confluence_tree_dry_run_writes_nothing(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_clone_confluence_tree_dry_run_validates_generated_manifest(tmp_path):
+    tree = ConfluenceTreeNode(page_id="1", title="Root Docs")
+    client = FakeCloneClient(
+        tree,
+        {"1": PageStorage(page_id="1", title="Root Docs", storage="<h1>Root Docs</h1>")},
+    )
+    request = CloneRequest(
+        root_page_id="1",
+        space="ENG",
+        root_url="https://example.atlassian.net/wiki/spaces/ENG/pages/999/Wrong",
+        output=tmp_path / "docs",
+        max_depth=None,
+        max_pages=1000,
+        dry_run=True,
+    )
+
+    with pytest.raises(CloneError, match="Generated clone manifest is invalid"):
+        await clone_confluence_tree(request, client=client)
+    assert not (tmp_path / "docs").exists()
+
+
+@pytest.mark.asyncio
 async def test_clone_confluence_tree_refuses_unsupported_remote_content(tmp_path):
     tree = ConfluenceTreeNode(page_id="1", title="Root Docs")
     client = FakeCloneClient(
@@ -426,8 +448,11 @@ async def test_clone_confluence_tree_refuses_unsupported_remote_content(tmp_path
         dry_run=False,
     )
 
-    with pytest.raises(CloneError, match="Unsupported Confluence content"):
+    with pytest.raises(CloneError, match="Unsupported Confluence content") as exc_info:
         await clone_confluence_tree(request, client=client)
+    message = str(exc_info.value)
+    assert "1 Root Docs" in message
+    assert "Unsupported Confluence macro: jira" in message
     assert not (tmp_path / "docs").exists()
 
 
@@ -447,3 +472,22 @@ def test_format_clone_summary_lists_next_commands(tmp_path):
     assert "Confluence clone complete" in summary
     assert "Pages: 1" in summary
     assert f"--project {tmp_path / 'docs'} --check-sync" in summary
+
+
+def test_format_clone_summary_dry_run_omits_project_commands(tmp_path):
+    tree = ConfluenceTreeNode(page_id="1", title="Root Docs")
+    from confluence_publisher.clone import CloneResult
+
+    summary = format_clone_summary(
+        CloneResult(
+            output=tmp_path / "docs",
+            page_count=1,
+            file_plan=build_clone_file_plan(tree),
+            written=False,
+        )
+    )
+
+    assert "Confluence clone dry run" in summary
+    assert "Run clone without --dry-run to write files." in summary
+    assert f"--project {tmp_path / 'docs'} --check-sync" not in summary
+    assert "--pull --yes" not in summary

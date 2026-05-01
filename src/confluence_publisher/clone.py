@@ -242,6 +242,27 @@ def _validate_generated_manifest(manifest: dict[str, Any]) -> None:
             raise CloneError(f"Generated clone manifest is invalid: {exc}") from exc
 
 
+def _validate_clone_project(
+    *,
+    output: Path,
+    space: str,
+    root_url: str | None,
+    file_plan: CloneFilePlan,
+    content: dict[str, CloneContentPage],
+) -> dict[str, Any]:
+    assert_clone_output_safe(output)
+    for page in file_plan.pages:
+        _target_for_clone_page(output, page.source_path)
+    manifest = _manifest_for_clone(
+        space=space,
+        root_url=root_url,
+        file_plan=file_plan,
+        content=content,
+    )
+    _validate_generated_manifest(manifest)
+    return manifest
+
+
 def write_clone_project(
     *,
     output: Path,
@@ -250,17 +271,16 @@ def write_clone_project(
     file_plan: CloneFilePlan,
     content: dict[str, CloneContentPage],
 ) -> None:
-    assert_clone_output_safe(output)
-    planned_writes = [
-        (page, _target_for_clone_page(output, page.source_path)) for page in file_plan.pages
-    ]
-    manifest = _manifest_for_clone(
+    manifest = _validate_clone_project(
+        output=output,
         space=space,
         root_url=root_url,
         file_plan=file_plan,
         content=content,
     )
-    _validate_generated_manifest(manifest)
+    planned_writes = [
+        (page, _target_for_clone_page(output, page.source_path)) for page in file_plan.pages
+    ]
     output.mkdir(parents=True, exist_ok=True)
     for page, target in planned_writes:
         converted = content.get(page.page_id)
@@ -306,11 +326,20 @@ async def clone_confluence_tree(request: CloneRequest, *, client) -> CloneResult
     if unsupported_messages:
         raise CloneError("Unsupported Confluence content: " + " | ".join(unsupported_messages))
 
+    root_url = request.root_url or tree.url
+    _validate_clone_project(
+        output=request.output,
+        space=request.space,
+        root_url=root_url,
+        file_plan=file_plan,
+        content=content,
+    )
+
     if not request.dry_run:
         write_clone_project(
             output=request.output,
             space=request.space,
-            root_url=request.root_url or tree.url,
+            root_url=root_url,
             file_plan=file_plan,
             content=content,
         )
@@ -326,6 +355,17 @@ async def clone_confluence_tree(request: CloneRequest, *, client) -> CloneResult
 def format_clone_summary(result: CloneResult) -> str:
     status = "complete" if result.written else "dry run"
     file_lines = "\n".join(f"  - {page.source_path}" for page in result.file_plan.pages)
+    if not result.written:
+        return "\n".join(
+            [
+                f"Confluence clone {status}",
+                f"Output: {result.output}",
+                f"Pages: {result.page_count}",
+                "Files:",
+                file_lines,
+                "Run clone without --dry-run to write files.",
+            ]
+        )
     return "\n".join(
         [
             f"Confluence clone {status}",
