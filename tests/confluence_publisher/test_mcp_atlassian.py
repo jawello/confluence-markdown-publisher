@@ -566,6 +566,41 @@ async def test_client_get_page_tree_reports_duplicate_before_max_pages():
 
 
 @pytest.mark.asyncio
+async def test_client_get_page_tree_reports_duplicate_sibling_before_max_pages():
+    pages = {
+        "1": {"id": "1", "title": "Root", "url": "https://example/pages/1/Root"},
+        "2": {"id": "2", "title": "Child", "url": "https://example/pages/2/Child"},
+    }
+    children = {
+        "1": [pages["2"], pages["2"]],
+        "2": [],
+    }
+
+    class TreeSession(FakeMcpSession):
+        async def call_tool(self, name, arguments):
+            self.calls.append((name, arguments))
+            if name == "confluence_get_page":
+                return {"structuredContent": pages[arguments["page_id"]]}
+            if name == "confluence_get_page_children":
+                return {
+                    "structuredContent": {
+                        "parent_id": arguments["parent_id"],
+                        "count": len(children[arguments["parent_id"]]),
+                        "results": children[arguments["parent_id"]],
+                    }
+                }
+            raise AssertionError(name)
+
+    session = TreeSession()
+    client = McpAtlassianClient(session)
+
+    with pytest.raises(McpToolError, match="duplicate page 2") as exc_info:
+        await client.get_page_tree("1", max_depth=None, max_pages=2)
+
+    assert "max-pages" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
 async def test_client_creates_page_under_parent_as_storage():
     session = FakeMcpSession()
     client = McpAtlassianClient(session)

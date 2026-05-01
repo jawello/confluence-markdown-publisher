@@ -342,11 +342,17 @@ class McpAtlassianClient:
                 current_page_id,
                 max_children=remaining_budget + 1,
             )
+            child_ids: set[str] = set()
             for child in page_children:
                 if child.page_id in seen:
                     raise McpToolError(
                         f"Confluence page tree contains duplicate page {child.page_id}"
                     )
+                if child.page_id in child_ids:
+                    raise McpToolError(
+                        f"Confluence page tree contains duplicate page {child.page_id}"
+                    )
+                child_ids.add(child.page_id)
             if len(page_children) > remaining_budget:
                 raise McpToolError(f"Confluence page tree exceeds --max-pages {max_pages}")
             for child in page_children:
