@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urlparse
+
+from .models import ConfluenceTreeNode, slugify
 
 
 class CloneError(ValueError):
@@ -100,3 +102,63 @@ def assert_clone_output_safe(output: Path) -> None:
     )
     if markdown_files:
         raise CloneError(f"Clone output already contains Markdown files: {output}")
+
+
+@dataclass(frozen=True)
+class ClonePlannedPage:
+    page_id: str
+    title: str
+    source_path: str
+    url: str | None
+    has_children: bool
+
+
+@dataclass(frozen=True)
+class CloneFilePlan:
+    root: ConfluenceTreeNode
+    pages: tuple[ClonePlannedPage, ...]
+
+
+def _unique_slug(title: str, used: set[str]) -> str:
+    base = slugify(title)
+    candidate = base
+    suffix = 2
+    while candidate in used:
+        candidate = f"{base}-{suffix}"
+        suffix += 1
+    used.add(candidate)
+    return candidate
+
+
+def build_clone_file_plan(root: ConfluenceTreeNode) -> CloneFilePlan:
+    pages: list[ClonePlannedPage] = []
+
+    def visit(node: ConfluenceTreeNode, directory: PurePosixPath) -> None:
+        has_children = bool(node.children)
+        if not pages:
+            source_path = "index.md"
+            child_directory = PurePosixPath("")
+        elif has_children:
+            source_path = (directory / "index.md").as_posix()
+            child_directory = directory
+        else:
+            source_path = (directory.parent / f"{directory.name}.md").as_posix()
+            child_directory = directory.parent
+
+        pages.append(
+            ClonePlannedPage(
+                page_id=node.page_id,
+                title=node.title,
+                source_path=source_path,
+                url=node.url,
+                has_children=has_children,
+            )
+        )
+
+        used_child_slugs: set[str] = set()
+        for child in node.children:
+            child_slug = _unique_slug(child.title, used_child_slugs)
+            visit(child, child_directory / child_slug)
+
+    visit(root, PurePosixPath(""))
+    return CloneFilePlan(root=root, pages=tuple(pages))

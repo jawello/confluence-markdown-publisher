@@ -6,9 +6,11 @@ from confluence_publisher.clone import (
     CloneError,
     CloneRequest,
     assert_clone_output_safe,
+    build_clone_file_plan,
     parse_clone_request,
     parse_confluence_page_url,
 )
+from confluence_publisher.models import ConfluenceTreeNode
 
 
 def test_parse_confluence_page_url_extracts_page_id_space_and_url():
@@ -128,3 +130,58 @@ def test_assert_clone_output_safe_rejects_existing_uppercase_markdown(tmp_path):
 
 def test_assert_clone_output_safe_allows_missing_output_directory(tmp_path):
     assert_clone_output_safe(tmp_path / "new-docs")
+
+
+def test_build_clone_file_plan_maps_nested_pages_to_indexes_and_leaves():
+    tree = ConfluenceTreeNode(
+        page_id="1",
+        title="Root Docs",
+        url="https://example.atlassian.net/wiki/spaces/ENG/pages/1/Root",
+        children=(
+            ConfluenceTreeNode(
+                page_id="2",
+                title="Guide",
+                url="https://example.atlassian.net/wiki/spaces/ENG/pages/2/Guide",
+                children=(
+                    ConfluenceTreeNode(
+                        page_id="3",
+                        title="Install & Run",
+                        url="https://example.atlassian.net/wiki/spaces/ENG/pages/3/Install",
+                    ),
+                ),
+            ),
+            ConfluenceTreeNode(
+                page_id="4",
+                title="Quick Reference",
+                url="https://example.atlassian.net/wiki/spaces/ENG/pages/4/Quick",
+            ),
+        ),
+    )
+
+    plan = build_clone_file_plan(tree)
+
+    assert [(page.page_id, page.source_path) for page in plan.pages] == [
+        ("1", "index.md"),
+        ("2", "guide/index.md"),
+        ("3", "guide/install-run.md"),
+        ("4", "quick-reference.md"),
+    ]
+
+
+def test_build_clone_file_plan_makes_duplicate_leaf_slugs_unique():
+    tree = ConfluenceTreeNode(
+        page_id="1",
+        title="Root",
+        children=(
+            ConfluenceTreeNode(page_id="2", title="Overview"),
+            ConfluenceTreeNode(page_id="3", title="Overview"),
+        ),
+    )
+
+    plan = build_clone_file_plan(tree)
+
+    assert [(page.page_id, page.source_path) for page in plan.pages] == [
+        ("1", "index.md"),
+        ("2", "overview.md"),
+        ("3", "overview-2.md"),
+    ]

@@ -46,6 +46,14 @@ class PageInfo:
 
 
 @dataclass(frozen=True)
+class ConfluenceTreeNode:
+    page_id: str
+    title: str
+    url: str | None = None
+    children: tuple["ConfluenceTreeNode", ...] = ()
+
+
+@dataclass(frozen=True)
 class PageStorage:
     page_id: str
     title: str
