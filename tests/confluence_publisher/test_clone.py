@@ -73,6 +73,32 @@ def test_parse_clone_request_requires_space_with_page_id(tmp_path):
         )
 
 
+def test_parse_clone_request_rejects_whitespace_page_id(tmp_path):
+    with pytest.raises(CloneError, match="--page-id must be a non-empty string"):
+        parse_clone_request(
+            url=None,
+            page_id=" \t\n",
+            space="~6393203da593cb822e995262",
+            output=tmp_path / "docs",
+            max_depth=None,
+            max_pages=1000,
+            dry_run=False,
+        )
+
+
+def test_parse_clone_request_rejects_whitespace_space(tmp_path):
+    with pytest.raises(CloneError, match="--space is required with --page-id"):
+        parse_clone_request(
+            url=None,
+            page_id="5164564861",
+            space=" \t\n",
+            output=tmp_path / "docs",
+            max_depth=None,
+            max_pages=1000,
+            dry_run=False,
+        )
+
+
 def test_assert_clone_output_safe_rejects_manifest(tmp_path):
     output = tmp_path / "docs"
     output.mkdir()
@@ -86,6 +112,15 @@ def test_assert_clone_output_safe_rejects_existing_markdown(tmp_path):
     output = tmp_path / "docs"
     output.mkdir()
     (output / "index.md").write_text("# Existing\n", encoding="utf-8")
+
+    with pytest.raises(CloneError, match="already contains Markdown files"):
+        assert_clone_output_safe(output)
+
+
+def test_assert_clone_output_safe_rejects_existing_uppercase_markdown(tmp_path):
+    output = tmp_path / "docs"
+    output.mkdir()
+    (output / "README.MD").write_text("# Existing\n", encoding="utf-8")
 
     with pytest.raises(CloneError, match="already contains Markdown files"):
         assert_clone_output_safe(output)

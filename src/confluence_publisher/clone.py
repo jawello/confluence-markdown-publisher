@@ -73,7 +73,9 @@ def parse_clone_request(
             dry_run=dry_run,
         )
 
-    if space is None:
+    if page_id is None or page_id.strip() == "":
+        raise CloneError("--page-id must be a non-empty string")
+    if space is None or space.strip() == "":
         raise CloneError("--space is required with --page-id")
     return CloneRequest(
         root_page_id=str(page_id),
@@ -93,6 +95,8 @@ def assert_clone_output_safe(output: Path) -> None:
         raise CloneError(f"Clone output must be a directory: {output}")
     if (output / ".confluence-publish.yml").exists():
         raise CloneError(f"Clone output already contains .confluence-publish.yml: {output}")
-    markdown_files = sorted(path for path in output.rglob("*.md") if path.is_file())
+    markdown_files = sorted(
+        path for path in output.rglob("*") if path.is_file() and path.suffix.lower() == ".md"
+    )
     if markdown_files:
         raise CloneError(f"Clone output already contains Markdown files: {output}")
