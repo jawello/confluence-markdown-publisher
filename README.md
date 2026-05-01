@@ -210,6 +210,26 @@ Use `--plan-only` to inspect the effective sync settings without rendering, conn
 
 Sync mode does not delete, move, or reorder Confluence pages. Confluence page titles are unique within a space, so title collisions fail before creation and must be resolved in the manifest.
 
+### Clone Existing Confluence Pages
+
+Create a local Markdown project from an existing Confluence page tree:
+
+```bash
+uv run publish-confluence clone \
+  --url "https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/pages/5164564861/Custom+UI+NEXT+Migration" \
+  --output docs/custom-ui-next-migration
+```
+
+`clone` reads the Confluence root page and its descendants, converts supported storage XHTML back to Markdown, writes one Markdown file per page, and creates `.confluence-publish.yml` with page IDs, URLs, titles, and `canonical_hash` baselines. It never updates Confluence.
+
+After cloning, use the regular project commands:
+
+```bash
+uv run publish-confluence --project docs/custom-ui-next-migration --check-sync
+uv run publish-confluence --project docs/custom-ui-next-migration --pull --yes
+uv run publish-confluence --project docs/custom-ui-next-migration --dry-run
+```
+
 ### Bidirectional Sync Checks
 
 Project mode can compare local Markdown with the current Confluence page body:
