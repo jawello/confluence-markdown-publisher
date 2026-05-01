@@ -202,6 +202,8 @@ def _storage_value(payload: dict[str, Any]) -> str | None:
 
 def _version_number(payload: dict[str, Any]) -> int | None:
     version = payload.get("version")
+    if isinstance(version, int):
+        return version
     if isinstance(version, dict):
         number = version.get("number")
         if isinstance(number, int):
@@ -259,7 +261,6 @@ class McpAtlassianClient:
                 "page_id": page_id,
                 "include_metadata": True,
                 "convert_to_markdown": False,
-                "include_content": True,
             },
         )
         payload = _structured_content(result)

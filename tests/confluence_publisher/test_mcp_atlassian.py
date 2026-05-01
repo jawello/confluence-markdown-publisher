@@ -151,11 +151,11 @@ async def test_client_gets_page_storage_with_version_metadata():
     session = FakeMcpSession(
         page_result={
             "structuredContent": {
-                "page": {
+                "metadata": {
                     "id": "5151854234",
                     "title": "Test",
-                    "body": {"storage": {"value": "<h1>Test</h1>"}},
-                    "version": {"number": 7},
+                    "content": {"value": "<h1>Test</h1>", "format": "storage"},
+                    "version": 7,
                 }
             }
         }
@@ -175,7 +175,6 @@ async def test_client_gets_page_storage_with_version_metadata():
                 "page_id": "5151854234",
                 "include_metadata": True,
                 "convert_to_markdown": False,
-                "include_content": True,
             },
         )
     ]
