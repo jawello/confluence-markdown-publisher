@@ -9,6 +9,12 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from .clone import (
+    CloneError,
+    clone_confluence_tree,
+    format_clone_summary,
+    parse_clone_request,
+)
 from .converter import collect_mermaid_blocks, convert_markdown_to_storage
 from .manifest import ManifestError, load_manifest
 from .mcp_atlassian import connect_mcp_atlassian
@@ -82,10 +88,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--yes", action="store_true")
     parser.add_argument("--allow-diagram-fallback", action="store_true")
+    subparsers = parser.add_subparsers(dest="command")
+    clone_parser = subparsers.add_parser(
+        "clone",
+        help="Clone a Confluence page tree into a local Markdown project.",
+    )
+    clone_parser.add_argument("--url", dest="clone_url")
+    clone_parser.add_argument("--page-id", dest="clone_page_id")
+    clone_parser.add_argument("--space", dest="clone_space")
+    clone_parser.add_argument("--output", dest="clone_output", type=Path, required=True)
+    clone_parser.add_argument("--max-depth", dest="clone_max_depth", type=int)
+    clone_parser.add_argument("--max-pages", dest="clone_max_pages", type=int, default=1000)
+    clone_parser.add_argument("--dry-run", action="store_true")
     return parser
 
 
 def validate_args(args: argparse.Namespace) -> None:
+    if getattr(args, "command", None) == "clone":
+        return
     if args.source is not None and args.project is not None:
         raise SystemExit("--source and --project are mutually exclusive")
     if args.source is None and args.project is None:
@@ -359,6 +379,23 @@ async def run_project_mode(args: argparse.Namespace) -> int:
 async def run_async(argv: Sequence[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
     validate_args(args)
+    if getattr(args, "command", None) == "clone":
+        try:
+            request = parse_clone_request(
+                url=args.clone_url,
+                page_id=args.clone_page_id,
+                space=args.clone_space,
+                output=args.clone_output,
+                max_depth=args.clone_max_depth,
+                max_pages=args.clone_max_pages,
+                dry_run=args.dry_run,
+            )
+            async with connect_mcp_atlassian() as client:
+                result = await clone_confluence_tree(request, client=client)
+            print(format_clone_summary(result))
+            return 0
+        except CloneError as exc:
+            raise SystemExit(str(exc)) from exc
     if args.project is not None:
         return await run_project_mode(args)
 

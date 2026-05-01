@@ -71,6 +71,31 @@ def test_arg_parser_accepts_bidirectional_flags():
     assert pull_args.pull is True
 
 
+def test_arg_parser_accepts_clone_subcommand(tmp_path):
+    args = build_arg_parser().parse_args(
+        [
+            "clone",
+            "--url",
+            "https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/"
+            "pages/5164564861/Custom+UI+NEXT+Migration",
+            "--output",
+            str(tmp_path / "docs"),
+            "--max-depth",
+            "2",
+            "--max-pages",
+            "25",
+            "--dry-run",
+        ]
+    )
+
+    assert args.command == "clone"
+    assert args.clone_url.startswith("https://criteo.atlassian.net/wiki/")
+    assert args.clone_output == tmp_path / "docs"
+    assert args.clone_max_depth == 2
+    assert args.clone_max_pages == 25
+    assert args.dry_run is True
+
+
 def test_validate_args_rejects_source_and_project_together():
     args = build_arg_parser().parse_args(
         ["--source", "page.md", "--page-id", "111111", "--project", "docs"]
@@ -155,6 +180,52 @@ async def test_run_async_dry_run_does_not_connect_to_mcp(tmp_path, monkeypatch, 
     assert result == 0
     output = capsys.readouterr().out
     assert "Dry run: yes" in output
+
+
+@pytest.mark.asyncio
+async def test_run_async_clone_dispatches_to_clone_flow(tmp_path, monkeypatch, capsys):
+    calls = []
+
+    async def fake_clone_confluence_tree(request, *, client):
+        calls.append(("clone", request.root_page_id, request.space, request.output, client))
+        from confluence_publisher.clone import CloneResult, build_clone_file_plan
+        from confluence_publisher.models import ConfluenceTreeNode
+
+        tree = ConfluenceTreeNode(page_id=request.root_page_id, title="Root")
+        return CloneResult(
+            output=request.output,
+            page_count=1,
+            file_plan=build_clone_file_plan(tree),
+            written=not request.dry_run,
+        )
+
+    client = FakeClient()
+    monkeypatch.setattr(cli, "connect_mcp_atlassian", fake_connect_for(client))
+    monkeypatch.setattr(cli, "clone_confluence_tree", fake_clone_confluence_tree)
+
+    result = await cli.run_async(
+        [
+            "clone",
+            "--url",
+            "https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/"
+            "pages/5164564861/Custom+UI+NEXT+Migration",
+            "--output",
+            str(tmp_path / "docs"),
+            "--dry-run",
+        ]
+    )
+
+    assert result == 0
+    assert calls == [
+        (
+            "clone",
+            "5164564861",
+            "~6393203da593cb822e995262",
+            tmp_path / "docs",
+            client,
+        )
+    ]
+    assert "Confluence clone dry run" in capsys.readouterr().out
 
 
 class FakeClient:
