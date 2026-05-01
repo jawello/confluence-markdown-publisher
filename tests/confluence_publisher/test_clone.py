@@ -6,6 +6,8 @@ from confluence_publisher.bidirectional import compute_canonical_markdown_hash
 from confluence_publisher.clone import (
     CloneContentPage,
     CloneError,
+    CloneFilePlan,
+    ClonePlannedPage,
     CloneRequest,
     assert_clone_output_safe,
     build_clone_file_plan,
@@ -244,3 +246,63 @@ def test_write_clone_project_refuses_missing_content(tmp_path):
             file_plan=file_plan,
             content={},
         )
+    assert not (tmp_path / "docs").exists()
+
+
+def test_write_clone_project_refuses_unsafe_source_path_without_writes(tmp_path):
+    tree = ConfluenceTreeNode(page_id="1", title="Root Docs")
+    file_plan = CloneFilePlan(
+        root=tree,
+        pages=(
+            ClonePlannedPage(
+                page_id="1",
+                title="Root Docs",
+                source_path="../escape.md",
+                url=None,
+                has_children=False,
+            ),
+        ),
+    )
+
+    with pytest.raises(CloneError, match=r"Invalid clone source path: \.\./escape\.md"):
+        write_clone_project(
+            output=tmp_path / "docs",
+            space="ENG",
+            root_url=None,
+            file_plan=file_plan,
+            content={"1": CloneContentPage(markdown="# Root Docs\n")},
+        )
+    assert not (tmp_path / "docs").exists()
+    assert not (tmp_path / "escape.md").exists()
+
+
+def test_write_clone_project_uses_root_url_for_root_page_manifest_entry(tmp_path):
+    tree = ConfluenceTreeNode(page_id="1", title="Root Docs", url=None)
+    root_url = "https://example.atlassian.net/wiki/spaces/ENG/pages/1/Root"
+
+    write_clone_project(
+        output=tmp_path / "docs",
+        space="ENG",
+        root_url=root_url,
+        file_plan=build_clone_file_plan(tree),
+        content={"1": CloneContentPage(markdown="# Root Docs\n")},
+    )
+
+    manifest = load_manifest(tmp_path / "docs" / ".confluence-publish.yml")
+    assert manifest.root_url == root_url
+    assert manifest.pages["index.md"].url == root_url
+
+
+def test_write_clone_project_refuses_invalid_root_url_without_writes(tmp_path):
+    tree = ConfluenceTreeNode(page_id="1", title="Root Docs", url=None)
+
+    with pytest.raises(CloneError, match="Generated clone manifest is invalid"):
+        write_clone_project(
+            output=tmp_path / "docs",
+            space="ENG",
+            root_url="https://example.atlassian.net/wiki/spaces/ENG/pages/999/Root",
+            file_plan=build_clone_file_plan(tree),
+            content={"1": CloneContentPage(markdown="# Root Docs\n")},
+        )
+    assert not (tmp_path / "docs").exists()
+    assert not (tmp_path / "docs" / "index.md").exists()

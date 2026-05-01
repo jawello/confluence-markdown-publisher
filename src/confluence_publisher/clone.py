@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from tempfile import TemporaryDirectory
 from typing import Any
 from urllib.parse import unquote, urlparse
 
 import yaml
 
 from .bidirectional import compute_canonical_markdown_hash
+from .manifest import ManifestError, load_manifest
 from .models import ConfluenceTreeNode, slugify
 
 
@@ -203,11 +205,40 @@ def _manifest_for_clone(
             "page_id": page.page_id,
             "canonical_hash": compute_canonical_markdown_hash(converted.markdown),
         }
-        if page.url is not None:
-            page_data["url"] = page.url
+        page_url = root_url if page is root_page and root_url is not None else page.url
+        if page_url is not None:
+            page_data["url"] = page_url
         pages_block[page.source_path] = page_data
     manifest["pages"] = pages_block
     return manifest
+
+
+def _validate_clone_source_path(source_path: str) -> None:
+    path = PurePosixPath(source_path)
+    if source_path == "" or path == PurePosixPath(".") or path.is_absolute() or ".." in path.parts:
+        raise CloneError(f"Invalid clone source path: {source_path}")
+
+
+def _target_for_clone_page(output: Path, source_path: str) -> Path:
+    _validate_clone_source_path(source_path)
+    output_root = output.resolve()
+    target = (output / source_path).resolve()
+    if not target.is_relative_to(output_root):
+        raise CloneError(f"Invalid clone source path: {source_path}")
+    return target
+
+
+def _validate_generated_manifest(manifest: dict[str, Any]) -> None:
+    with TemporaryDirectory(prefix="confluence-clone-manifest-") as temp_dir:
+        manifest_path = Path(temp_dir) / ".confluence-publish.yml"
+        manifest_path.write_text(
+            yaml.safe_dump(manifest, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+        try:
+            load_manifest(manifest_path)
+        except ManifestError as exc:
+            raise CloneError(f"Generated clone manifest is invalid: {exc}") from exc
 
 
 def write_clone_project(
@@ -219,18 +250,21 @@ def write_clone_project(
     content: dict[str, CloneContentPage],
 ) -> None:
     assert_clone_output_safe(output)
+    planned_writes = [
+        (page, _target_for_clone_page(output, page.source_path)) for page in file_plan.pages
+    ]
     manifest = _manifest_for_clone(
         space=space,
         root_url=root_url,
         file_plan=file_plan,
         content=content,
     )
+    _validate_generated_manifest(manifest)
     output.mkdir(parents=True, exist_ok=True)
-    for page in file_plan.pages:
+    for page, target in planned_writes:
         converted = content.get(page.page_id)
         if converted is None:
             raise CloneError(f"Missing converted content for page {page.page_id}")
-        target = output / page.source_path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(converted.markdown, encoding="utf-8")
 
