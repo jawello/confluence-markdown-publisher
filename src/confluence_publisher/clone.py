@@ -11,6 +11,7 @@ import yaml
 from .bidirectional import compute_canonical_markdown_hash
 from .manifest import ManifestError, load_manifest
 from .models import ConfluenceTreeNode, slugify
+from .storage_to_markdown import storage_to_markdown
 
 
 class CloneError(ValueError):
@@ -271,4 +272,69 @@ def write_clone_project(
     (output / ".confluence-publish.yml").write_text(
         yaml.safe_dump(manifest, sort_keys=False, allow_unicode=True),
         encoding="utf-8",
+    )
+
+
+@dataclass(frozen=True)
+class CloneResult:
+    output: Path
+    page_count: int
+    file_plan: CloneFilePlan
+    written: bool
+
+
+async def clone_confluence_tree(request: CloneRequest, *, client) -> CloneResult:
+    assert_clone_output_safe(request.output)
+    tree = await client.get_page_tree(
+        request.root_page_id,
+        max_depth=request.max_depth,
+        max_pages=request.max_pages,
+    )
+    file_plan = build_clone_file_plan(tree)
+    content: dict[str, CloneContentPage] = {}
+    unsupported_messages: list[str] = []
+    for planned_page in file_plan.pages:
+        remote = await client.get_page_storage(planned_page.page_id)
+        converted = storage_to_markdown(remote.storage)
+        if converted.unsupported:
+            unsupported_messages.append(
+                f"{planned_page.page_id} {planned_page.title}: "
+                + "; ".join(converted.unsupported)
+            )
+        content[planned_page.page_id] = CloneContentPage(markdown=converted.markdown)
+
+    if unsupported_messages:
+        raise CloneError("Unsupported Confluence content: " + " | ".join(unsupported_messages))
+
+    if not request.dry_run:
+        write_clone_project(
+            output=request.output,
+            space=request.space,
+            root_url=request.root_url or tree.url,
+            file_plan=file_plan,
+            content=content,
+        )
+
+    return CloneResult(
+        output=request.output,
+        page_count=len(file_plan.pages),
+        file_plan=file_plan,
+        written=not request.dry_run,
+    )
+
+
+def format_clone_summary(result: CloneResult) -> str:
+    status = "complete" if result.written else "dry run"
+    file_lines = "\n".join(f"  - {page.source_path}" for page in result.file_plan.pages)
+    return "\n".join(
+        [
+            f"Confluence clone {status}",
+            f"Output: {result.output}",
+            f"Pages: {result.page_count}",
+            "Files:",
+            file_lines,
+            "Next commands:",
+            f"  uv run publish-confluence --project {result.output} --check-sync",
+            f"  uv run publish-confluence --project {result.output} --pull --yes",
+        ]
     )

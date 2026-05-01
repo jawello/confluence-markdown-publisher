@@ -11,12 +11,14 @@ from confluence_publisher.clone import (
     CloneRequest,
     assert_clone_output_safe,
     build_clone_file_plan,
+    clone_confluence_tree,
+    format_clone_summary,
     parse_clone_request,
     parse_confluence_page_url,
     write_clone_project,
 )
 from confluence_publisher.manifest import load_manifest
-from confluence_publisher.models import ConfluenceTreeNode
+from confluence_publisher.models import ConfluenceTreeNode, PageStorage
 
 
 def test_parse_confluence_page_url_extracts_page_id_space_and_url():
@@ -306,3 +308,138 @@ def test_write_clone_project_refuses_invalid_root_url_without_writes(tmp_path):
         )
     assert not (tmp_path / "docs").exists()
     assert not (tmp_path / "docs" / "index.md").exists()
+
+
+class FakeCloneClient:
+    def __init__(self, tree, storages):
+        self.tree = tree
+        self.storages = storages
+        self.calls = []
+
+    async def get_page_tree(self, page_id, *, max_depth, max_pages):
+        self.calls.append(("get_page_tree", page_id, max_depth, max_pages))
+        return self.tree
+
+    async def get_page_storage(self, page_id):
+        self.calls.append(("get_page_storage", page_id))
+        return self.storages[page_id]
+
+
+@pytest.mark.asyncio
+async def test_clone_confluence_tree_writes_converted_project(tmp_path):
+    tree = ConfluenceTreeNode(
+        page_id="1",
+        title="Root Docs",
+        url="https://example.atlassian.net/wiki/spaces/ENG/pages/1/Root",
+        children=(ConfluenceTreeNode(page_id="2", title="Guide"),),
+    )
+    client = FakeCloneClient(
+        tree,
+        {
+            "1": PageStorage(
+                page_id="1",
+                title="Root Docs",
+                storage="<h1>Root Docs</h1><p>Welcome.</p>",
+            ),
+            "2": PageStorage(
+                page_id="2",
+                title="Guide",
+                storage="<h1>Guide</h1><p>Read this.</p>",
+            ),
+        },
+    )
+    request = CloneRequest(
+        root_page_id="1",
+        space="ENG",
+        root_url=tree.url,
+        output=tmp_path / "docs",
+        max_depth=None,
+        max_pages=1000,
+        dry_run=False,
+    )
+
+    result = await clone_confluence_tree(request, client=client)
+
+    assert result.page_count == 2
+    assert result.written is True
+    assert (tmp_path / "docs" / "index.md").read_text(encoding="utf-8") == (
+        "# Root Docs\n\nWelcome.\n"
+    )
+    assert client.calls == [
+        ("get_page_tree", "1", None, 1000),
+        ("get_page_storage", "1"),
+        ("get_page_storage", "2"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_clone_confluence_tree_dry_run_writes_nothing(tmp_path):
+    tree = ConfluenceTreeNode(page_id="1", title="Root Docs")
+    client = FakeCloneClient(
+        tree,
+        {"1": PageStorage(page_id="1", title="Root Docs", storage="<h1>Root Docs</h1>")},
+    )
+    request = CloneRequest(
+        root_page_id="1",
+        space="ENG",
+        root_url=None,
+        output=tmp_path / "docs",
+        max_depth=2,
+        max_pages=50,
+        dry_run=True,
+    )
+
+    result = await clone_confluence_tree(request, client=client)
+
+    assert result.written is False
+    assert not (tmp_path / "docs").exists()
+
+
+@pytest.mark.asyncio
+async def test_clone_confluence_tree_refuses_unsupported_remote_content(tmp_path):
+    tree = ConfluenceTreeNode(page_id="1", title="Root Docs")
+    client = FakeCloneClient(
+        tree,
+        {
+            "1": PageStorage(
+                page_id="1",
+                title="Root Docs",
+                storage=(
+                    '<ac:structured-macro ac:name="jira">'
+                    '<ac:parameter ac:name="key">ABC-1</ac:parameter>'
+                    "</ac:structured-macro>"
+                ),
+            )
+        },
+    )
+    request = CloneRequest(
+        root_page_id="1",
+        space="ENG",
+        root_url=None,
+        output=tmp_path / "docs",
+        max_depth=None,
+        max_pages=1000,
+        dry_run=False,
+    )
+
+    with pytest.raises(CloneError, match="Unsupported Confluence content"):
+        await clone_confluence_tree(request, client=client)
+    assert not (tmp_path / "docs").exists()
+
+
+def test_format_clone_summary_lists_next_commands(tmp_path):
+    tree = ConfluenceTreeNode(page_id="1", title="Root Docs")
+    from confluence_publisher.clone import CloneResult
+
+    summary = format_clone_summary(
+        CloneResult(
+            output=tmp_path / "docs",
+            page_count=1,
+            file_plan=build_clone_file_plan(tree),
+            written=True,
+        )
+    )
+
+    assert "Confluence clone complete" in summary
+    assert "Pages: 1" in summary
+    assert f"--project {tmp_path / 'docs'} --check-sync" in summary
