@@ -390,6 +390,44 @@ async def test_client_gets_page_children():
 
 
 @pytest.mark.asyncio
+async def test_client_gets_page_children_paginates_until_short_batch():
+    first_batch = [
+        {"id": str(page_id), "title": f"Child {page_id}"}
+        for page_id in range(2, 52)
+    ]
+    second_batch = [
+        {"id": "52", "title": "Child 52"},
+        {"id": "53", "title": "Child 53"},
+    ]
+
+    class PaginatedChildrenSession(FakeMcpSession):
+        async def call_tool(self, name, arguments):
+            self.calls.append((name, arguments))
+            if name == "confluence_get_page_children":
+                batch = first_batch if arguments["start"] == 0 else second_batch
+                return {
+                    "structuredContent": {
+                        "parent_id": arguments["parent_id"],
+                        "count": len(batch),
+                        "results": batch,
+                    }
+                }
+            return await super().call_tool(name, arguments)
+
+    session = PaginatedChildrenSession()
+    client = McpAtlassianClient(session)
+
+    children = await client.get_page_children("1")
+
+    assert [child.page_id for child in children] == [str(page_id) for page_id in range(2, 54)]
+    assert [
+        call[1]["start"]
+        for call in session.calls
+        if call[0] == "confluence_get_page_children"
+    ] == [0, 50]
+
+
+@pytest.mark.asyncio
 async def test_client_get_page_tree_recurses_with_limits():
     pages = {
         "1": {"id": "1", "title": "Root", "url": "https://example/pages/1/Root"},
@@ -434,6 +472,97 @@ async def test_client_get_page_tree_recurses_with_limits():
             ),
         ),
     )
+
+
+@pytest.mark.asyncio
+async def test_client_get_page_tree_raises_max_pages_without_partial_tree():
+    pages = {
+        "1": {"id": "1", "title": "Root", "url": "https://example/pages/1/Root"},
+        "2": {"id": "2", "title": "Child 2", "url": "https://example/pages/2/Child"},
+        "3": {"id": "3", "title": "Child 3", "url": "https://example/pages/3/Child"},
+    }
+    children = {
+        "1": [pages["2"], pages["3"]],
+        "2": [],
+        "3": [],
+    }
+
+    class TreeSession(FakeMcpSession):
+        async def call_tool(self, name, arguments):
+            self.calls.append((name, arguments))
+            if name == "confluence_get_page":
+                return {"structuredContent": pages[arguments["page_id"]]}
+            if name == "confluence_get_page_children":
+                results = children[arguments["parent_id"]]
+                start = arguments["start"]
+                limit = arguments["limit"]
+                return {
+                    "structuredContent": {
+                        "parent_id": arguments["parent_id"],
+                        "count": len(results[start : start + limit]),
+                        "results": results[start : start + limit],
+                    }
+                }
+            raise AssertionError(name)
+
+    session = TreeSession()
+    client = McpAtlassianClient(session)
+
+    with pytest.raises(McpToolError, match="exceeds --max-pages 2"):
+        await client.get_page_tree("1", max_depth=None, max_pages=2)
+
+    child_calls = [
+        arguments
+        for name, arguments in session.calls
+        if name == "confluence_get_page_children"
+    ]
+    assert child_calls == [
+        {
+            "parent_id": "1",
+            "expand": "version",
+            "limit": 50,
+            "include_content": False,
+            "convert_to_markdown": False,
+            "start": 0,
+            "include_folders": False,
+        }
+    ]
+    assert [
+        arguments["page_id"]
+        for name, arguments in session.calls
+        if name == "confluence_get_page"
+    ] == ["1"]
+
+
+@pytest.mark.asyncio
+async def test_client_get_page_tree_reports_duplicate_before_max_pages():
+    pages = {
+        "1": {"id": "1", "title": "Root", "url": "https://example/pages/1/Root"},
+    }
+    children = {
+        "1": [pages["1"]],
+    }
+
+    class TreeSession(FakeMcpSession):
+        async def call_tool(self, name, arguments):
+            self.calls.append((name, arguments))
+            if name == "confluence_get_page":
+                return {"structuredContent": pages[arguments["page_id"]]}
+            if name == "confluence_get_page_children":
+                return {
+                    "structuredContent": {
+                        "parent_id": arguments["parent_id"],
+                        "count": 1,
+                        "results": children[arguments["parent_id"]],
+                    }
+                }
+            raise AssertionError(name)
+
+    session = TreeSession()
+    client = McpAtlassianClient(session)
+
+    with pytest.raises(McpToolError, match="duplicate page 1"):
+        await client.get_page_tree("1", max_depth=None, max_pages=1)
 
 
 @pytest.mark.asyncio

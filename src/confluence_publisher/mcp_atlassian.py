@@ -279,23 +279,38 @@ class McpAtlassianClient:
             url=_page_url(page_payload) or _page_url(payload),
         )
 
-    async def get_page_children(self, page_id: str) -> tuple[ConfluenceTreeNode, ...]:
-        result = await self.session.call_tool(
-            "confluence_get_page_children",
-            {
-                "parent_id": page_id,
-                "expand": "version",
-                "limit": 50,
-                "include_content": False,
-                "convert_to_markdown": False,
-                "start": 0,
-                "include_folders": False,
-            },
-        )
-        payload = _result_payload(result)
-        if isinstance(payload, dict):
-            _raise_payload_error(payload, "confluence_get_page_children")
-        return _tree_nodes(payload, "confluence_get_page_children")
+    async def get_page_children(
+        self,
+        page_id: str,
+        *,
+        max_children: int | None = None,
+    ) -> tuple[ConfluenceTreeNode, ...]:
+        limit = 50
+        start = 0
+        children: list[ConfluenceTreeNode] = []
+        while max_children is None or len(children) < max_children:
+            result = await self.session.call_tool(
+                "confluence_get_page_children",
+                {
+                    "parent_id": page_id,
+                    "expand": "version",
+                    "limit": limit,
+                    "include_content": False,
+                    "convert_to_markdown": False,
+                    "start": start,
+                    "include_folders": False,
+                },
+            )
+            payload = _result_payload(result)
+            if isinstance(payload, dict):
+                _raise_payload_error(payload, "confluence_get_page_children")
+            batch = _tree_nodes(payload, "confluence_get_page_children")
+            remaining = None if max_children is None else max_children - len(children)
+            children.extend(batch if remaining is None else batch[:remaining])
+            if len(batch) < limit:
+                break
+            start += len(batch)
+        return tuple(children)
 
     async def get_page_tree(
         self,
@@ -307,12 +322,12 @@ class McpAtlassianClient:
         seen: set[str] = set()
 
         async def visit(current_page_id: str, depth: int) -> ConfluenceTreeNode:
-            if len(seen) >= max_pages:
-                raise McpToolError(f"Confluence page tree exceeds --max-pages {max_pages}")
             if current_page_id in seen:
                 raise McpToolError(
                     f"Confluence page tree contains duplicate page {current_page_id}"
                 )
+            if len(seen) >= max_pages:
+                raise McpToolError(f"Confluence page tree exceeds --max-pages {max_pages}")
             seen.add(current_page_id)
             page = await self.get_page(current_page_id)
             if max_depth is not None and depth >= max_depth:
@@ -322,7 +337,19 @@ class McpAtlassianClient:
                     url=page.url,
                 )
             children = []
-            for child in await self.get_page_children(current_page_id):
+            remaining_budget = max_pages - len(seen)
+            page_children = await self.get_page_children(
+                current_page_id,
+                max_children=remaining_budget + 1,
+            )
+            for child in page_children:
+                if child.page_id in seen:
+                    raise McpToolError(
+                        f"Confluence page tree contains duplicate page {child.page_id}"
+                    )
+            if len(page_children) > remaining_budget:
+                raise McpToolError(f"Confluence page tree exceeds --max-pages {max_pages}")
+            for child in page_children:
                 children.append(await visit(child.page_id, depth + 1))
             return ConfluenceTreeNode(
                 page_id=page.page_id,
