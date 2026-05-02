@@ -195,6 +195,61 @@ def test_build_clone_file_plan_makes_duplicate_leaf_slugs_unique():
     ]
 
 
+def test_write_clone_project_refuses_generated_path_collision_without_writes(tmp_path):
+    tree = ConfluenceTreeNode(
+        page_id="1",
+        title="Root",
+        children=(ConfluenceTreeNode(page_id="2", title="Index"),),
+    )
+
+    with pytest.raises(CloneError, match="Duplicate clone source path: index.md"):
+        write_clone_project(
+            output=tmp_path / "docs",
+            space="ENG",
+            root_url=None,
+            file_plan=build_clone_file_plan(tree),
+            content={
+                "1": CloneContentPage(markdown="# Root\n"),
+                "2": CloneContentPage(markdown="# Index\n"),
+            },
+        )
+
+    assert not (tmp_path / "docs").exists()
+
+
+def test_write_clone_project_refuses_existing_parent_file_without_partial_writes(tmp_path):
+    output = tmp_path / "docs"
+    output.mkdir()
+    (output / "guide").write_text("not a directory", encoding="utf-8")
+    tree = ConfluenceTreeNode(
+        page_id="1",
+        title="Root",
+        children=(
+            ConfluenceTreeNode(
+                page_id="2",
+                title="Guide",
+                children=(ConfluenceTreeNode(page_id="3", title="Install"),),
+            ),
+        ),
+    )
+
+    with pytest.raises(CloneError, match="Clone output path parent is a file"):
+        write_clone_project(
+            output=output,
+            space="ENG",
+            root_url=None,
+            file_plan=build_clone_file_plan(tree),
+            content={
+                "1": CloneContentPage(markdown="# Root\n"),
+                "2": CloneContentPage(markdown="# Guide\n"),
+                "3": CloneContentPage(markdown="# Install\n"),
+            },
+        )
+
+    assert not (output / "index.md").exists()
+    assert (output / "guide").read_text(encoding="utf-8") == "not a directory"
+
+
 def test_write_clone_project_creates_markdown_and_manifest(tmp_path):
     tree = ConfluenceTreeNode(
         page_id="1",

@@ -229,6 +229,28 @@ def _target_for_clone_page(output: Path, source_path: str) -> Path:
     return target
 
 
+def _validate_unique_clone_source_paths(file_plan: CloneFilePlan) -> None:
+    seen: set[str] = set()
+    for page in file_plan.pages:
+        if page.source_path in seen:
+            raise CloneError(f"Duplicate clone source path: {page.source_path}")
+        seen.add(page.source_path)
+
+
+def _validate_clone_target_paths(output: Path, file_plan: CloneFilePlan) -> None:
+    output_root = output.resolve()
+    targets = [_target_for_clone_page(output, page.source_path) for page in file_plan.pages]
+    target_set = set(targets)
+    for target in targets:
+        if target.exists():
+            raise CloneError(f"Clone output path already exists: {target}")
+        parent = target.parent
+        while parent != output_root:
+            if parent in target_set or (parent.exists() and not parent.is_dir()):
+                raise CloneError(f"Clone output path parent is a file: {parent}")
+            parent = parent.parent
+
+
 def _validate_generated_manifest(manifest: dict[str, Any]) -> None:
     with TemporaryDirectory(prefix="confluence-clone-manifest-") as temp_dir:
         manifest_path = Path(temp_dir) / ".confluence-publish.yml"
@@ -251,8 +273,8 @@ def _validate_clone_project(
     content: dict[str, CloneContentPage],
 ) -> dict[str, Any]:
     assert_clone_output_safe(output)
-    for page in file_plan.pages:
-        _target_for_clone_page(output, page.source_path)
+    _validate_unique_clone_source_paths(file_plan)
+    _validate_clone_target_paths(output, file_plan)
     manifest = _manifest_for_clone(
         space=space,
         root_url=root_url,

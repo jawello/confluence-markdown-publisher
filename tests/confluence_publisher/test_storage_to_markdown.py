@@ -80,7 +80,7 @@ def test_storage_panels_tasks_and_toc_convert_to_supported_markdown():
     )
 
 
-def test_storage_standalone_image_converts_to_markdown_attachment_link():
+def test_storage_standalone_image_is_reported_as_unsupported():
     storage = (
         '<ac:image ac:alt="Architecture">'
         '<ri:attachment ri:filename="architecture.png" />'
@@ -89,8 +89,24 @@ def test_storage_standalone_image_converts_to_markdown_attachment_link():
 
     result = storage_to_markdown(storage)
 
-    assert result.unsupported == ()
-    assert result.markdown == "![Architecture](attachment:architecture.png)\n"
+    assert result.markdown == ""
+    assert result.unsupported == ("Unsupported Confluence image: architecture.png",)
+
+
+def test_storage_confluence_link_is_reported_as_unsupported():
+    storage = '<p>See <ac:link><ri:page ri:content-title="Target" /></ac:link>.</p>'
+
+    result = storage_to_markdown(storage)
+
+    assert result.unsupported == ("Unsupported Confluence element: ac:link",)
+
+
+def test_storage_confluence_mention_is_reported_as_unsupported():
+    storage = '<p>Owner: <ri:user ri:account-id="abc123" /></p>'
+
+    result = storage_to_markdown(storage)
+
+    assert result.unsupported == ("Unsupported Confluence element: ri:user",)
 
 
 def test_storage_lists_and_simple_table_convert_to_markdown():

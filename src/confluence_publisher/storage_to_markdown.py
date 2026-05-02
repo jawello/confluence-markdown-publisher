@@ -33,6 +33,11 @@ def _plain_text(tag: Tag) -> str:
     return tag.get_text("", strip=False)
 
 
+def _add_unsupported(unsupported: list[str], message: str) -> None:
+    if message not in unsupported:
+        unsupported.append(message)
+
+
 def _parameter_text(tag: Tag, name: str) -> str | None:
     for parameter in tag.find_all("ac:parameter"):
         if _attr(parameter, "ac:name") == name:
@@ -52,14 +57,18 @@ def _rich_body(tag: Tag) -> Tag | None:
     return tag.find("ac:rich-text-body")
 
 
-def _inline_markdown(node) -> str:
+def _inline_markdown(node, unsupported: list[str]) -> str:
     if isinstance(node, NavigableString):
         return str(node)
     if not isinstance(node, Tag):
         return ""
 
     name = node.name.lower()
-    children = "".join(_inline_markdown(child) for child in node.children)
+    if name.startswith(("ac:", "ri:")):
+        _add_unsupported(unsupported, f"Unsupported Confluence element: {name}")
+        return ""
+
+    children = "".join(_inline_markdown(child, unsupported) for child in node.children)
     if name in {"strong", "b"}:
         return f"**{children.strip()}**"
     if name in {"em", "i"}:
@@ -72,11 +81,14 @@ def _inline_markdown(node) -> str:
         return f"[{text}]({href})" if href else text
     if name == "br":
         return "\n"
+    if name in {"p", "span"}:
+        return children
+    _add_unsupported(unsupported, f"Unsupported Confluence element: {name}")
     return children
 
 
-def _inline_text(tag: Tag) -> str:
-    raw = "".join(_inline_markdown(child) for child in tag.children)
+def _inline_text(tag: Tag, unsupported: list[str]) -> str:
+    raw = "".join(_inline_markdown(child, unsupported) for child in tag.children)
     return re.sub(r"[ \t\r\n]+", " ", raw).strip()
 
 
@@ -88,34 +100,33 @@ def _panel_to_markdown(tag: Tag, name: str, unsupported: list[str]) -> str:
     return f"> {prefix}: {text}\n"
 
 
-def _task_list_to_markdown(tag: Tag) -> str:
+def _task_list_to_markdown(tag: Tag, unsupported: list[str]) -> str:
     lines: list[str] = []
     for task in tag.find_all("ac:task", recursive=False):
         status = task.find("ac:task-status")
         body = task.find("ac:task-body")
         marker = "x" if status is not None and status.get_text(strip=True) == "complete" else " "
-        text = _inline_text(body) if body is not None else ""
+        text = _inline_text(body, unsupported) if body is not None else ""
         lines.append(f"- [{marker}] {text}")
     return "\n".join(lines) + ("\n" if lines else "")
 
 
-def _image_to_markdown(tag: Tag) -> str:
+def _image_to_markdown(tag: Tag, unsupported: list[str]) -> str:
     attachment = tag.find("ri:attachment")
     filename = _attr(attachment, "ri:filename") if attachment is not None else None
-    alt = _attr(tag, "ac:alt") or "image"
-    if filename is None:
-        return ""
-    return f"![{alt}](attachment:{filename})\n"
+    suffix = f": {filename}" if filename is not None else ""
+    _add_unsupported(unsupported, f"Unsupported Confluence image{suffix}")
+    return ""
 
 
-def _table_to_markdown(tag: Tag) -> str:
+def _table_to_markdown(tag: Tag, unsupported: list[str]) -> str:
     rows = tag.find_all("tr")
     if not rows:
         return ""
     rendered_rows: list[list[str]] = []
     for row in rows:
         cells = row.find_all(["th", "td"], recursive=False)
-        rendered_rows.append([_inline_text(cell) for cell in cells])
+        rendered_rows.append([_inline_text(cell, unsupported) for cell in cells])
     if not rendered_rows:
         return ""
     width = max(len(row) for row in rendered_rows)
@@ -131,11 +142,11 @@ def _table_to_markdown(tag: Tag) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _list_to_markdown(tag: Tag, ordered: bool) -> str:
+def _list_to_markdown(tag: Tag, ordered: bool, unsupported: list[str]) -> str:
     lines: list[str] = []
     for index, item in enumerate(tag.find_all("li", recursive=False), start=1):
         marker = f"{index}." if ordered else "-"
-        lines.append(f"{marker} {_inline_text(item)}")
+        lines.append(f"{marker} {_inline_text(item, unsupported)}")
     return "\n".join(lines) + ("\n" if lines else "")
 
 
@@ -169,24 +180,25 @@ def _tag_to_markdown(tag: Tag, unsupported: list[str]) -> str:
     if name == "ac:structured-macro":
         return _macro_to_markdown(tag, unsupported)
     if name == "ac:task-list":
-        return _task_list_to_markdown(tag)
+        return _task_list_to_markdown(tag, unsupported)
     if name == "ac:image":
-        return _image_to_markdown(tag)
+        return _image_to_markdown(tag, unsupported)
     if name in {"h1", "h2", "h3", "h4", "h5", "h6"}:
         level = int(name[1])
-        return f"{'#' * level} {_inline_text(tag)}\n"
+        return f"{'#' * level} {_inline_text(tag, unsupported)}\n"
     if name == "p":
-        text = _inline_text(tag)
+        text = _inline_text(tag, unsupported)
         return f"{text}\n" if text else ""
     if name == "ul":
-        return _list_to_markdown(tag, ordered=False)
+        return _list_to_markdown(tag, ordered=False, unsupported=unsupported)
     if name == "ol":
-        return _list_to_markdown(tag, ordered=True)
+        return _list_to_markdown(tag, ordered=True, unsupported=unsupported)
     if name == "table":
-        return _table_to_markdown(tag)
+        return _table_to_markdown(tag, unsupported)
     if name in {"div", "body", "html", "[document]"}:
         return _children_to_markdown(tag, unsupported)
-    return _inline_text(tag) + ("\n" if _inline_text(tag) else "")
+    _add_unsupported(unsupported, f"Unsupported Confluence element: {name}")
+    return ""
 
 
 def _children_to_markdown(tag: Tag | None, unsupported: list[str]) -> str:

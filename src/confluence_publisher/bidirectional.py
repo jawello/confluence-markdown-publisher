@@ -41,6 +41,7 @@ class ProjectInvariantReport:
             SyncStatus.CONFLICT,
             SyncStatus.UNKNOWN_DIVERGENCE,
             SyncStatus.UNSUPPORTED_REMOTE,
+            SyncStatus.LOCAL_ONLY,
         }
         return any(page.status in unsafe for page in self.pages)
 
@@ -162,6 +163,7 @@ async def pull_remote_changes(
             SyncStatus.UNKNOWN_DIVERGENCE,
             SyncStatus.UNSUPPORTED_REMOTE,
             SyncStatus.LOCAL_CHANGED,
+            SyncStatus.LOCAL_ONLY,
         }
     ]
     if unsafe_pages:

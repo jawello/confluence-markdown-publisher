@@ -75,6 +75,7 @@ async def test_check_project_invariants_reports_local_only_pages(tmp_path):
 
     assert [page.status for page in report.pages] == [SyncStatus.LOCAL_ONLY]
     assert report.pages[0].remote_hash is None
+    assert report.has_conflicts is True
     assert client.calls == []
 
 
@@ -162,4 +163,13 @@ async def test_pull_remote_changes_refuses_unknown_divergence(tmp_path):
     client = FakeContentClient({"111111": page_storage("<h1>Home</h1><p>Remote text.</p>")})
 
     with pytest.raises(RuntimeError, match="unsafe to pull"):
+        await pull_remote_changes(plan, client=client, dry_run=False)
+
+
+@pytest.mark.asyncio
+async def test_pull_remote_changes_refuses_local_only_pages(tmp_path):
+    plan = make_plan(tmp_path, local_text="# Home\n\nLocal only.\n", remote_page_id=None)
+    client = FakeContentClient({})
+
+    with pytest.raises(RuntimeError, match=r"index\.md \(local_only\)"):
         await pull_remote_changes(plan, client=client, dry_run=False)
