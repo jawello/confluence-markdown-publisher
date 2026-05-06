@@ -526,7 +526,8 @@ def test_format_clone_summary_lists_next_commands(tmp_path):
 
     assert "Confluence clone complete" in summary
     assert "Pages: 1" in summary
-    assert f"--project {tmp_path / 'docs'} --check-sync" in summary
+    assert f"uv run publish-confluence status {tmp_path / 'docs'}" in summary
+    assert f"uv run publish-confluence pull {tmp_path / 'docs'} --yes" in summary
 
 
 def test_format_clone_summary_dry_run_omits_project_commands(tmp_path):
@@ -544,5 +545,5 @@ def test_format_clone_summary_dry_run_omits_project_commands(tmp_path):
 
     assert "Confluence clone dry run" in summary
     assert "Run clone without --dry-run to write files." in summary
-    assert f"--project {tmp_path / 'docs'} --check-sync" not in summary
-    assert "--pull --yes" not in summary
+    assert f"uv run publish-confluence status {tmp_path / 'docs'}" not in summary
+    assert f"uv run publish-confluence pull {tmp_path / 'docs'} --yes" not in summary

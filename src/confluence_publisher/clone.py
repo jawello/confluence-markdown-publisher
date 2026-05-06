@@ -396,7 +396,7 @@ def format_clone_summary(result: CloneResult) -> str:
             "Files:",
             file_lines,
             "Next commands:",
-            f"  uv run publish-confluence --project {result.output} --check-sync",
-            f"  uv run publish-confluence --project {result.output} --pull --yes",
+            f"  uv run publish-confluence status {result.output}",
+            f"  uv run publish-confluence pull {result.output} --yes",
         ]
     )

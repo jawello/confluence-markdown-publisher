@@ -9,76 +9,32 @@ from confluence_publisher.manifest import load_manifest
 from confluence_publisher.models import PageInfo, PageStorage, RenderedDiagram
 
 
-def test_arg_parser_defaults_to_svg_and_mcp_backend():
-    args = build_arg_parser().parse_args(
-        ["--source", "en/00-overview.md", "--page-id", "5151854234"]
-    )
-
-    assert args.source == Path("en/00-overview.md")
-    assert args.page_id == "5151854234"
-    assert args.output_format == "svg"
-    assert args.diagram_width == 1000
-    assert args.dry_run is False
-
-
-def test_arg_parser_rejects_non_positive_diagram_width():
+def test_arg_parser_requires_subcommand():
     with pytest.raises(SystemExit):
-        build_arg_parser().parse_args(
-            [
-                "--source",
-                "en/00-overview.md",
-                "--page-id",
-                "5151854234",
-                "--diagram-width",
-                "0",
-            ]
-        )
+        build_arg_parser().parse_args([])
 
 
-def test_arg_parser_accepts_project_mode():
-    args = build_arg_parser().parse_args(["--project", "docs", "--plan-only"])
-
-    assert args.project == Path("docs")
-    assert args.plan_only is True
-    assert args.manifest is None
-
-
-def test_arg_parser_accepts_sync_flags():
-    args = build_arg_parser().parse_args(
-        [
-            "--project",
-            "docs",
-            "--sync",
-            "--recreate-missing-root",
-            "--recreate-stale-pages",
-        ]
-    )
-
-    assert args.sync is True
-    assert args.recreate_missing_root is True
-    assert args.recreate_stale_pages is True
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--source", "page.md", "--page-id", "111111"],
+        ["--project", "docs"],
+        ["--project", "docs", "--check-sync"],
+        ["--project", "docs", "--pull"],
+        ["--project", "docs", "--sync"],
+    ],
+)
+def test_arg_parser_rejects_legacy_top_level_forms(argv):
+    with pytest.raises(SystemExit):
+        build_arg_parser().parse_args(argv)
 
 
-def test_arg_parser_accepts_bidirectional_flags():
-    parser = cli.build_arg_parser()
-
-    check_args = parser.parse_args(["--project", "docs", "--check-sync"])
-    pull_args = parser.parse_args(["--project", "docs", "--pull"])
-
-    assert check_args.check_sync is True
-    assert check_args.pull is False
-    assert pull_args.check_sync is False
-    assert pull_args.pull is True
-
-
-def test_arg_parser_accepts_clone_subcommand(tmp_path):
+def test_arg_parser_accepts_clone_url_positional_form(tmp_path):
     args = build_arg_parser().parse_args(
         [
             "clone",
-            "--url",
             "https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/"
             "pages/5164564861/Custom+UI+NEXT+Migration",
-            "--output",
             str(tmp_path / "docs"),
             "--max-depth",
             "2",
@@ -89,77 +45,66 @@ def test_arg_parser_accepts_clone_subcommand(tmp_path):
     )
 
     assert args.command == "clone"
-    assert args.clone_url.startswith("https://criteo.atlassian.net/wiki/")
+    assert args.clone_source.startswith("https://criteo.atlassian.net/wiki/")
     assert args.clone_output == tmp_path / "docs"
+    assert args.clone_space is None
     assert args.clone_max_depth == 2
     assert args.clone_max_pages == 25
     assert args.dry_run is True
 
 
-def test_arg_parser_preserves_root_dry_run_for_clone_subcommand(tmp_path):
+def test_arg_parser_accepts_clone_page_id_positional_form(tmp_path):
     args = build_arg_parser().parse_args(
         [
-            "--dry-run",
             "clone",
-            "--url",
-            "https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/"
-            "pages/5164564861/Custom+UI+NEXT+Migration",
-            "--output",
+            "5164564861",
             str(tmp_path / "docs"),
+            "--space",
+            "~6393203da593cb822e995262",
         ]
     )
 
     assert args.command == "clone"
-    assert args.dry_run is True
+    assert args.clone_source == "5164564861"
+    assert args.clone_output == tmp_path / "docs"
+    assert args.clone_space == "~6393203da593cb822e995262"
 
 
-def test_validate_args_rejects_source_and_project_together():
-    args = build_arg_parser().parse_args(
-        ["--source", "page.md", "--page-id", "111111", "--project", "docs"]
+@pytest.mark.parametrize("command", ["plan", "status", "pull", "push"])
+def test_arg_parser_accepts_project_subcommands(command):
+    args = build_arg_parser().parse_args([command, "docs"])
+
+    assert args.command == command
+    assert args.project == Path("docs")
+    assert args.manifest is None
+
+
+def test_arg_parser_accepts_plan_and_push_recovery_flags():
+    plan_args = build_arg_parser().parse_args(
+        ["plan", "docs", "--create-missing-pages", "--recreate-missing-root"]
+    )
+    push_args = build_arg_parser().parse_args(
+        ["push", "docs", "--create-missing-pages", "--recreate-stale-pages", "--yes"]
     )
 
-    with pytest.raises(SystemExit):
-        cli.validate_args(args)
-
-
-def test_validate_args_requires_page_id_for_single_page():
-    args = build_arg_parser().parse_args(["--source", "page.md"])
-
-    with pytest.raises(SystemExit):
-        cli.validate_args(args)
-
-
-def test_validate_args_rejects_page_id_in_project_mode():
-    args = build_arg_parser().parse_args(["--project", "docs", "--page-id", "111111"])
-
-    with pytest.raises(SystemExit):
-        cli.validate_args(args)
+    assert plan_args.create_missing_pages is True
+    assert plan_args.recreate_missing_root is True
+    assert push_args.create_missing_pages is True
+    assert push_args.recreate_stale_pages is True
+    assert push_args.yes is True
 
 
 @pytest.mark.parametrize(
-    ("flag", "expected"),
+    "argv",
     [
-        ("--sync", "--sync"),
-        ("--recreate-missing-root", "--recreate-missing-root"),
-        ("--recreate-stale-pages", "--recreate-stale-pages"),
-        ("--check-sync", "--check-sync"),
-        ("--pull", "--pull"),
+        ["status", "docs", "--create-missing-pages"],
+        ["pull", "docs", "--recreate-missing-root"],
+        ["pull", "docs", "--recreate-stale-pages"],
     ],
 )
-def test_validate_args_rejects_sync_flags_in_source_mode(flag, expected):
-    args = build_arg_parser().parse_args(
-        ["--source", "page.md", "--page-id", "111111", flag]
-    )
-
-    with pytest.raises(SystemExit, match=expected):
-        cli.validate_args(args)
-
-
-def test_validate_args_rejects_check_sync_and_pull_together():
-    args = cli.build_arg_parser().parse_args(["--project", "docs", "--check-sync", "--pull"])
-
-    with pytest.raises(SystemExit, match="--check-sync and --pull are mutually exclusive"):
-        cli.validate_args(args)
+def test_arg_parser_rejects_recovery_flags_outside_plan_and_push(argv):
+    with pytest.raises(SystemExit):
+        build_arg_parser().parse_args(argv)
 
 
 def test_preview_lists_page_source_and_attachments():
@@ -223,10 +168,8 @@ async def test_run_async_clone_dispatches_to_clone_flow(tmp_path, monkeypatch, c
     result = await cli.run_async(
         [
             "clone",
-            "--url",
             "https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/"
             "pages/5164564861/Custom+UI+NEXT+Migration",
-            "--output",
             str(tmp_path / "docs"),
             "--dry-run",
         ]
@@ -246,7 +189,7 @@ async def test_run_async_clone_dispatches_to_clone_flow(tmp_path, monkeypatch, c
 
 
 @pytest.mark.asyncio
-async def test_run_async_clone_preserves_root_dry_run(tmp_path, monkeypatch, capsys):
+async def test_run_async_clone_preserves_subcommand_dry_run(tmp_path, monkeypatch, capsys):
     calls = []
 
     async def fake_clone_confluence_tree(request, *, client):
@@ -268,13 +211,11 @@ async def test_run_async_clone_preserves_root_dry_run(tmp_path, monkeypatch, cap
 
     result = await cli.run_async(
         [
-            "--dry-run",
             "clone",
-            "--url",
             "https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/"
             "pages/5164564861/Custom+UI+NEXT+Migration",
-            "--output",
             str(tmp_path / "docs"),
+            "--dry-run",
         ]
     )
 
@@ -301,10 +242,8 @@ async def test_run_async_clone_reports_clone_errors_after_mcp_shutdown(
         await cli.run_async(
             [
                 "clone",
-                "--url",
                 "https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/"
                 "pages/5164564861/Custom+UI+NEXT+Migration",
-                "--output",
                 str(tmp_path / "docs"),
             ]
         )

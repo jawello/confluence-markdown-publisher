@@ -53,25 +53,18 @@ class _StoreExplicit(argparse.Action):
         setattr(namespace, f"{self.dest}_explicit", True)
 
 
-def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="publish-confluence",
-        description="Publish Markdown to Confluence storage format with rendered Mermaid diagrams.",
-    )
-    parser.set_defaults(output_format_explicit=False, diagram_width_explicit=False)
-    parser.add_argument("--source", type=Path)
-    parser.add_argument("--page-id")
-    parser.add_argument("--title")
-    parser.add_argument("--project", type=Path)
+def _add_manifest_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--manifest", type=Path)
-    parser.add_argument("--plan-only", action="store_true")
+
+
+def _add_create_recovery_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--create-missing-pages", action="store_true")
-    parser.add_argument("--sync", action="store_true")
-    parser.add_argument("--check-sync", action="store_true")
-    parser.add_argument("--pull", action="store_true")
     parser.add_argument("--recreate-missing-root", action="store_true")
     parser.add_argument("--recreate-stale-pages", action="store_true")
-    parser.add_argument("--comment")
+
+
+def _add_render_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.set_defaults(output_format_explicit=False, diagram_width_explicit=False)
     parser.add_argument(
         "--output-format",
         choices=("svg", "png"),
@@ -85,21 +78,76 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action=_StoreExplicit,
     )
     parser.add_argument("--mmdc-bin", default="mmdc")
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--yes", action="store_true")
     parser.add_argument("--allow-diagram-fallback", action="store_true")
-    subparsers = parser.add_subparsers(dest="command")
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="publish-confluence",
+        description="Manage manifest-backed Markdown projects for Confluence.",
+    )
+    parser.set_defaults(
+        source=None,
+        page_id=None,
+        title=None,
+        plan_only=False,
+        sync=False,
+        check_sync=False,
+        pull=False,
+        create_missing_pages=False,
+        recreate_missing_root=False,
+        recreate_stale_pages=False,
+        comment=None,
+        output_format="svg",
+        output_format_explicit=False,
+        diagram_width=1000,
+        diagram_width_explicit=False,
+        mmdc_bin="mmdc",
+        dry_run=False,
+        yes=False,
+        allow_diagram_fallback=False,
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
     clone_parser = subparsers.add_parser(
         "clone",
         help="Clone a Confluence page tree into a local Markdown project.",
     )
-    clone_parser.add_argument("--url", dest="clone_url")
-    clone_parser.add_argument("--page-id", dest="clone_page_id")
+    clone_parser.add_argument("clone_source")
+    clone_parser.add_argument("clone_output", type=Path)
     clone_parser.add_argument("--space", dest="clone_space")
-    clone_parser.add_argument("--output", dest="clone_output", type=Path, required=True)
     clone_parser.add_argument("--max-depth", dest="clone_max_depth", type=int)
     clone_parser.add_argument("--max-pages", dest="clone_max_pages", type=int, default=1000)
-    clone_parser.add_argument("--dry-run", action="store_true", default=argparse.SUPPRESS)
+    clone_parser.add_argument("--dry-run", action="store_true")
+
+    plan_parser = subparsers.add_parser("plan", help="Validate and print a local project plan.")
+    plan_parser.add_argument("project", type=Path)
+    plan_parser.set_defaults(plan_only=True)
+    _add_manifest_argument(plan_parser)
+    _add_create_recovery_arguments(plan_parser)
+
+    status_parser = subparsers.add_parser("status", help="Check local and remote sync state.")
+    status_parser.add_argument("project", type=Path)
+    status_parser.set_defaults(check_sync=True)
+    _add_manifest_argument(status_parser)
+
+    pull_parser = subparsers.add_parser("pull", help="Pull safe remote-only changes into Markdown.")
+    pull_parser.add_argument("project", type=Path)
+    pull_parser.set_defaults(pull=True)
+    _add_manifest_argument(pull_parser)
+    pull_parser.add_argument("--dry-run", action="store_true")
+    pull_parser.add_argument("--yes", action="store_true")
+
+    push_parser = subparsers.add_parser("push", help="Push local Markdown changes to Confluence.")
+    push_parser.add_argument("project", type=Path)
+    push_parser.set_defaults(sync=True)
+    _add_manifest_argument(push_parser)
+    _add_create_recovery_arguments(push_parser)
+    push_parser.add_argument("--dry-run", action="store_true")
+    push_parser.add_argument("--yes", action="store_true")
+    push_parser.add_argument("--comment")
+    _add_render_arguments(push_parser)
+
     return parser
 
 
@@ -395,9 +443,11 @@ async def run_async(argv: Sequence[str] | None = None) -> int:
     validate_args(args)
     if getattr(args, "command", None) == "clone":
         try:
+            source = args.clone_source
+            is_url = "://" in source or "/pages/" in source
             request = parse_clone_request(
-                url=args.clone_url,
-                page_id=args.clone_page_id,
+                url=source if is_url else None,
+                page_id=None if is_url else source,
                 space=args.clone_space,
                 output=args.clone_output,
                 max_depth=args.clone_max_depth,
