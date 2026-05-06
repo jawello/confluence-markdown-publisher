@@ -64,7 +64,7 @@ Do not run live Confluence publishing unless the user explicitly asks.
 - `manifest.py`: `.confluence-publish.yml` loading and validation.
 - `project.py`: Markdown discovery with include/exclude and filesystem safety checks.
 - `planner.py`: publish plan construction and hierarchy validation.
-- `batch.py`: project publish-plan execution.
+- `batch.py`: project publish-plan formatting.
 - `converter.py`: Markdown-to-Confluence storage conversion.
 - `renderer.py`: Mermaid rendering with `mmdc`.
 - `storage.py`: Confluence storage macro builders.
