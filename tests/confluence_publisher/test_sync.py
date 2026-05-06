@@ -627,6 +627,31 @@ pages:
 
 
 @pytest.mark.asyncio
+async def test_sync_project_missing_child_page_id_requires_create_missing_pages(tmp_path):
+    from confluence_publisher.sync import sync_project
+
+    child_dir = tmp_path / "guide"
+    child_dir.mkdir()
+    root = tmp_path / "index.md"
+    child = child_dir / "index.md"
+    root.write_text("# Home\n\nPlain text.\n", encoding="utf-8")
+    child.write_text("# Guide\n\nPlain text.\n", encoding="utf-8")
+    plan = sync_plan(
+        tmp_path,
+        items=(
+            PlannedPage("index.md", root, "111111", "Home", None, None),
+            PlannedPage("guide/index.md", child, None, "Guide", None, "index.md"),
+        ),
+    )
+    client = FakeSyncClient()
+
+    with pytest.raises(RuntimeError, match="--create-missing-pages"):
+        await sync_project(plan, client=client, dry_run=False, mmdc_bin="mmdc")
+
+    assert not any(call[0] == "create_page" for call in client.calls)
+
+
+@pytest.mark.asyncio
 async def test_sync_project_missing_child_page_id_creates_under_root(tmp_path):
     from confluence_publisher.manifest import load_manifest
     from confluence_publisher.sync import prepare_sync_pages, sync_project
@@ -674,7 +699,9 @@ pages:
             ),
         ),
     )
-    plan = PublishPlan(**{**plan.__dict__, "manifest_path": manifest_path})
+    plan = PublishPlan(
+        **{**plan.__dict__, "manifest_path": manifest_path, "create_missing_pages": True}
+    )
     client = FakeSyncClient()
 
     result = await sync_project(plan, client=client, dry_run=False, mmdc_bin="mmdc")

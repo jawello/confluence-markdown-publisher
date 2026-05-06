@@ -179,7 +179,7 @@ def test_build_publish_plan_carries_sync_settings_and_root_parent(tmp_path):
     assert plan.items[0].last_synced_at == "2026-04-28T07:00:00Z"
 
 
-def test_build_publish_plan_allows_missing_page_ids_with_sync_mode(tmp_path):
+def test_build_publish_plan_rejects_missing_page_ids_with_sync_mode(tmp_path):
     (tmp_path / "index.md").write_text("# Home\n", encoding="utf-8")
     project_manifest = ProjectManifest(
         path=tmp_path / ".confluence-publish.yml",
@@ -195,21 +195,20 @@ def test_build_publish_plan_allows_missing_page_ids_with_sync_mode(tmp_path):
         sync=SyncSettings(enabled=True),
     )
 
-    plan = build_publish_plan(
-        project_root=tmp_path,
-        manifest=project_manifest,
-        discovered_paths=("index.md",),
-        excluded_count=0,
-        version_comment=None,
-        output_format=None,
-        diagram_width=None,
-        allow_diagram_fallback=None,
-        sync_enabled=True,
-        recreate_missing_root=False,
-        recreate_stale_pages=False,
-    )
-
-    assert plan.items[0].page_id is None
+    with pytest.raises(PlannerError, match="missing page_id"):
+        build_publish_plan(
+            project_root=tmp_path,
+            manifest=project_manifest,
+            discovered_paths=("index.md",),
+            excluded_count=0,
+            version_comment=None,
+            output_format=None,
+            diagram_width=None,
+            allow_diagram_fallback=None,
+            sync_enabled=True,
+            recreate_missing_root=False,
+            recreate_stale_pages=False,
+        )
 
 
 def test_build_publish_plan_uses_explicit_root_for_flat_pages(tmp_path):

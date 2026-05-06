@@ -359,6 +359,33 @@ pages:
 
 
 @pytest.mark.asyncio
+async def test_run_async_plan_rejects_missing_page_id_without_create_missing_pages(
+    tmp_path,
+    monkeypatch,
+):
+    (tmp_path / "index.md").write_text("# Home\n", encoding="utf-8")
+    (tmp_path / ".confluence-publish.yml").write_text(
+        """
+space: "~6393203da593cb822e995262"
+root:
+  parent_page_id: "999999"
+pages:
+  index.md:
+    title: "Home"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    def fail_connect():
+        raise AssertionError("planning error must not connect to MCP")
+
+    monkeypatch.setattr(cli, "connect_mcp_atlassian", fail_connect)
+
+    with pytest.raises(SystemExit, match="missing page_id"):
+        await cli.run_async(["plan", str(tmp_path)])
+
+
+@pytest.mark.asyncio
 async def test_run_async_push_dry_run_renders_without_connecting(tmp_path, monkeypatch, capsys):
     (tmp_path / "index.md").write_text("# Home\n\nPlain text.\n", encoding="utf-8")
     (tmp_path / ".confluence-publish.yml").write_text(

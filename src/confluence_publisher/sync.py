@@ -289,7 +289,7 @@ def _write_created_identity(
 
 def _requires_space_for_creation(plan: PublishPlan) -> bool:
     return (
-        any(item.page_id is None for item in plan.items)
+        (plan.create_missing_pages and any(item.page_id is None for item in plan.items))
         or plan.recreate_missing_root
         or plan.recreate_stale_pages
     )
@@ -298,6 +298,13 @@ def _requires_space_for_creation(plan: PublishPlan) -> bool:
 async def sync_project(plan: PublishPlan, *, client, dry_run: bool, mmdc_bin: str) -> int:
     if not plan.sync_enabled:
         raise RuntimeError("sync_project requires a sync-enabled plan")
+    missing_pages = [item for item in plan.items if item.page_id is None]
+    if missing_pages and not plan.create_missing_pages:
+        details = ", ".join(item.source_path for item in missing_pages)
+        raise RuntimeError(
+            "Cannot create missing Confluence pages without --create-missing-pages: "
+            f"{details}"
+        )
     if plan.space is None and _requires_space_for_creation(plan):
         raise RuntimeError("Cannot sync project without a Confluence space")
 
@@ -365,7 +372,6 @@ async def sync_project(plan: PublishPlan, *, client, dry_run: bool, mmdc_bin: st
         )
 
     prepared_pages = prepare_sync_pages(plan, mmdc_bin=mmdc_bin)
-    missing_pages = [item for item in plan.items if item.page_id is None]
     created_pages: dict[str, PageInfo] = {}
     page_ids = {item.source_path: item.page_id for item in plan.items if item.page_id}
     if missing_pages:

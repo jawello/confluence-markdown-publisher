@@ -197,7 +197,7 @@ Live sync flow:
 5. Existing non-root page IDs are checked for readability.
 6. Unreadable non-root pages require `recreate_stale_pages`.
 7. Recreating a stale page also recreates its descendants so the local tree remains attached to the new parent chain.
-8. Pages without `page_id` are created under their planned parent when the root is readable.
+8. Pages without `page_id` are created under their planned parent only when `--create-missing-pages` is passed.
 9. Before any create operation, the tool checks local duplicate titles and Confluence title collisions in the target space.
 10. Each successful create immediately writes the new `page_id` and URL to `.confluence-publish.yml`.
 11. The page content is rendered to storage format and hashed.

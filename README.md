@@ -191,7 +191,7 @@ With `sync.enabled: true`, project publishing checks the manifest state before w
 
 - If the root page ID is no longer readable and `recreate_missing_root` is enabled, the root is recreated under `root.parent_page_id`.
 - If a non-root page ID is no longer readable and `recreate_stale_pages` is enabled, that page and its descendants are recreated.
-- Pages without `page_id` are created under their planned parent when the root is readable.
+- Pages without `page_id` are created under their planned parent only when `--create-missing-pages` is passed.
 - Created page IDs, URLs, content hashes, and sync timestamps are written back to `.confluence-publish.yml`.
 - Pages with a matching stored content hash are skipped.
 

@@ -186,7 +186,7 @@ def build_publish_plan(
         for source_path in discovered
         if manifest.pages[source_path].page_id is None
     )
-    if missing_page_ids and not (create_missing_pages or sync_enabled):
+    if missing_page_ids and not create_missing_pages:
         entries = ", ".join(missing_page_ids)
         raise PlannerError(
             "Cannot publish project: pages are missing page_id values: "
