@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from confluence_publisher import cli
+from confluence_publisher import page
 from confluence_publisher.mcp_atlassian import McpToolError
 from confluence_publisher.models import PageInfo
 from confluence_publisher.models import RenderedDiagram
@@ -197,7 +197,7 @@ def test_prepare_sync_pages_keeps_rendered_diagram_files_after_return(tmp_path, 
         sync_enabled=True,
     )
 
-    monkeypatch.setattr(cli, "MermaidRenderer", FakeRenderer)
+    monkeypatch.setattr(page, "MermaidRenderer", FakeRenderer)
 
     prepared = prepare_sync_pages(plan, mmdc_bin="mmdc")
 
@@ -949,7 +949,7 @@ def test_prepare_sync_pages_handles_long_deep_source_paths(tmp_path, monkeypatch
         sync_enabled=True,
     )
 
-    monkeypatch.setattr(cli, "MermaidRenderer", FakeRenderer)
+    monkeypatch.setattr(page, "MermaidRenderer", FakeRenderer)
 
     prepared = prepare_sync_pages(plan, mmdc_bin="mmdc")
 

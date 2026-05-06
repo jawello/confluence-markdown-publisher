@@ -11,11 +11,11 @@ from hashlib import sha256
 from pathlib import Path
 from urllib.parse import quote
 
-from .cli import _prepare_single_page
 from .bidirectional import compute_canonical_markdown_hash
 from .manifest import ManifestPageSyncState, write_manifest_sync_state
 from .mcp_atlassian import McpToolError
 from .models import PageInfo, RenderedDiagram
+from .page import prepare_page
 from .planner import PlannedPage, PublishPlan
 
 
@@ -103,7 +103,7 @@ def prepare_sync_pages(plan: PublishPlan, *, mmdc_bin: str) -> dict[str, Prepare
     prepared_pages: dict[str, PreparedSyncPage] = {}
     temp_root: Path | None = None
     for page_index, item in enumerate(plan.items, start=1):
-        with _prepare_single_page(
+        with prepare_page(
             source=item.absolute_path,
             output_format=plan.output_format,
             diagram_width=plan.diagram_width,

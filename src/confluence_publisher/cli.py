@@ -3,10 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
-import tempfile
-from collections.abc import Iterator, Sequence
-from contextlib import contextmanager
-from dataclasses import dataclass
+from collections.abc import Sequence
 from pathlib import Path
 
 from .clone import (
@@ -15,23 +12,18 @@ from .clone import (
     format_clone_summary,
     parse_clone_request,
 )
-from .converter import collect_mermaid_blocks, convert_markdown_to_storage
 from .manifest import ManifestError, load_manifest
 from .mcp_atlassian import connect_mcp_atlassian
 from .models import RenderedDiagram
+from .page import PreparedPage, prepare_page, publish_prepared_page
 from .planner import PlannerError, build_publish_plan
 from .project import discover_markdown_files
-from .renderer import MermaidRenderer, RenderError
-from .storage import diagram_fragment, fallback_mermaid_fragment
 
 
 DEFAULT_SINGLE_PAGE_VERSION_COMMENT = "Rendered Mermaid diagrams from Markdown source"
 
 
-@dataclass(frozen=True)
-class _PreparedSinglePage:
-    storage: str
-    rendered_diagrams: list[RenderedDiagram]
+_PreparedSinglePage = PreparedPage
 
 
 def _positive_int(value: str) -> int:
@@ -210,7 +202,6 @@ def build_preview(
     )
 
 
-@contextmanager
 def _prepare_single_page(
     *,
     source: Path,
@@ -218,39 +209,14 @@ def _prepare_single_page(
     diagram_width: int,
     mmdc_bin: str,
     allow_diagram_fallback: bool,
-) -> Iterator[_PreparedSinglePage]:
-    markdown_text = source.read_text(encoding="utf-8")
-    page_slug = source.stem
-    blocks = collect_mermaid_blocks(markdown_text, page_slug, output_format)
-    diagram_fragments: dict[int, str] = {}
-    rendered_diagrams: list[RenderedDiagram] = []
-
-    with tempfile.TemporaryDirectory(prefix="confluence-mermaid-") as temp_path:
-        temp_dir = Path(temp_path)
-        renderer = MermaidRenderer(mmdc_bin)
-        for block in blocks:
-            try:
-                rendered = renderer.render(block, temp_dir)
-            except RenderError as exc:
-                if not allow_diagram_fallback:
-                    raise SystemExit(str(exc)) from exc
-                diagram_fragments[block.ordinal] = fallback_mermaid_fragment(block.source)
-                continue
-
-            rendered_diagrams.append(rendered)
-            diagram_fragments[block.ordinal] = diagram_fragment(
-                block,
-                width=block.display_width or diagram_width,
-            )
-
-        storage = convert_markdown_to_storage(
-            markdown_text,
-            page_slug=page_slug,
-            output_format=output_format,
-            diagram_fragments=diagram_fragments,
-            allow_diagram_fallback=allow_diagram_fallback,
-        )
-        yield _PreparedSinglePage(storage=storage, rendered_diagrams=rendered_diagrams)
+):
+    return prepare_page(
+        source=source,
+        output_format=output_format,
+        diagram_width=diagram_width,
+        mmdc_bin=mmdc_bin,
+        allow_diagram_fallback=allow_diagram_fallback,
+    )
 
 
 async def _publish_prepared_single_page(
@@ -262,9 +228,14 @@ async def _publish_prepared_single_page(
     client,
     version_comment: str,
 ) -> None:
-    for rendered in rendered_diagrams:
-        await client.upload_attachment(page_id, rendered.output_path)
-    await client.update_page_storage(page_id, title, storage, version_comment=version_comment)
+    await publish_prepared_page(
+        page_id=page_id,
+        title=title,
+        storage=storage,
+        rendered_diagrams=rendered_diagrams,
+        client=client,
+        version_comment=version_comment,
+    )
 
 
 async def publish_single_page(
