@@ -165,8 +165,8 @@ def _build_project_plan(
         allow_diagram_fallback=True if getattr(args, "allow_diagram_fallback", False) else None,
         create_missing_pages=create_missing_pages,
         sync_enabled=True,
-        recreate_missing_root=recreate_missing_root,
-        recreate_stale_pages=recreate_stale_pages,
+        recreate_missing_root=manifest.sync.recreate_missing_root or recreate_missing_root,
+        recreate_stale_pages=manifest.sync.recreate_stale_pages or recreate_stale_pages,
     )
 
 

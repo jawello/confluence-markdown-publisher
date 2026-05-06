@@ -330,6 +330,35 @@ pages:
 
 
 @pytest.mark.asyncio
+async def test_run_async_plan_uses_manifest_recovery_flags(tmp_path, monkeypatch, capsys):
+    (tmp_path / "index.md").write_text("# Home\n", encoding="utf-8")
+    (tmp_path / ".confluence-publish.yml").write_text(
+        """
+sync:
+  recreate_missing_root: true
+  recreate_stale_pages: true
+pages:
+  index.md:
+    page_id: "111111"
+    title: "Home"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    def fail_connect():
+        raise AssertionError("plan must not connect to MCP")
+
+    monkeypatch.setattr(cli, "connect_mcp_atlassian", fail_connect)
+
+    result = await cli.run_async(["plan", str(tmp_path)])
+
+    assert result == 0
+    output = capsys.readouterr().out
+    assert "Recreate missing root: yes" in output
+    assert "Recreate stale pages: yes" in output
+
+
+@pytest.mark.asyncio
 async def test_run_async_push_dry_run_renders_without_connecting(tmp_path, monkeypatch, capsys):
     (tmp_path / "index.md").write_text("# Home\n\nPlain text.\n", encoding="utf-8")
     (tmp_path / ".confluence-publish.yml").write_text(
@@ -354,6 +383,35 @@ pages:
     assert "Confluence project publish plan" in output
     assert "Storage preview for index.md:" in output
     assert "<h1>Home</h1>" in output
+
+
+@pytest.mark.asyncio
+async def test_run_async_push_dry_run_uses_manifest_recovery_flags(tmp_path, monkeypatch):
+    (tmp_path / "index.md").write_text("# Home\n", encoding="utf-8")
+    (tmp_path / ".confluence-publish.yml").write_text(
+        """
+sync:
+  recreate_missing_root: true
+  recreate_stale_pages: true
+pages:
+  index.md:
+    page_id: "111111"
+    title: "Home"
+""".strip(),
+        encoding="utf-8",
+    )
+    calls = []
+
+    async def fake_sync_project(plan, *, client, dry_run, mmdc_bin):
+        calls.append((plan.recreate_missing_root, plan.recreate_stale_pages))
+        return 0
+
+    monkeypatch.setattr(cli.sync, "sync_project", fake_sync_project)
+
+    result = await cli.run_async(["push", str(tmp_path), "--dry-run"])
+
+    assert result == 0
+    assert calls == [(True, True)]
 
 
 @pytest.mark.asyncio
