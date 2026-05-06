@@ -47,45 +47,49 @@ Coverage is informational and not CI-enforced. The current observed baseline is 
 
 ## Usage
 
-Preview conversion without publishing:
+Clone an existing Confluence page tree into a local Markdown project:
 
 ```bash
-uv run publish-confluence \
-  --source /path/to/document.md \
-  --page-id 5151854234 \
-  --title "Test" \
-  --dry-run
+uv run publish-confluence clone "<confluence-page-url>" docs
 ```
 
-Publish without an interactive prompt:
+Validate the local project plan without rendering diagrams or contacting Confluence:
 
 ```bash
-uv run publish-confluence \
-  --source /path/to/document.md \
-  --page-id 5151854234 \
-  --title "Test" \
-  --yes
+uv run publish-confluence plan docs
 ```
 
-Use a custom Mermaid CLI binary:
+Check whether local Markdown, manifest baselines, and Confluence still match:
 
 ```bash
-uv run publish-confluence \
-  --source /path/to/document.md \
-  --page-id 5151854234 \
-  --mmdc-bin /path/to/mmdc \
-  --yes
+uv run publish-confluence status docs
+```
+
+Preview safe remote-only changes before rewriting local Markdown:
+
+```bash
+uv run publish-confluence pull docs --dry-run
+```
+
+Apply safe remote-only changes to local Markdown:
+
+```bash
+uv run publish-confluence pull docs --yes
+```
+
+Preview Confluence writes without connecting to Confluence:
+
+```bash
+uv run publish-confluence push docs --dry-run
+```
+
+Publish local Markdown to Confluence without an interactive prompt:
+
+```bash
+uv run publish-confluence push docs --yes
 ```
 
 ## Project Mode
-
-Publish a documentation folder with a manifest:
-
-```bash
-uv run publish-confluence \
-  --project docs \
-  --plan-only
-```
 
 The default manifest is `docs/.confluence-publish.yml`:
 
@@ -108,7 +112,7 @@ pages:
     url: "https://criteo.atlassian.net/wiki/pages/111111/Project+Documentation"
 ```
 
-Project mode does not create Confluence pages by default. Every discovered Markdown file must have a `page_id` in the manifest unless `--create-missing-pages` is used.
+Project mode does not create Confluence pages by default. Every discovered Markdown file must have a `page_id` in the manifest unless `push` or `plan` is run with `--create-missing-pages`.
 
 For documentation authoring rules, use [docs/documentation-style.md](docs/documentation-style.md). For delegated preparation work, use [docs/documentation-agent-prompt.md](docs/documentation-agent-prompt.md).
 
@@ -150,10 +154,8 @@ pages:
 ```
 
 ```bash
-uv run publish-confluence \
-  --project docs \
-  --create-missing-pages \
-  --yes
+uv run publish-confluence plan docs --create-missing-pages
+uv run publish-confluence push docs --create-missing-pages --yes
 ```
 
 The tool creates pages without `page_id`, writes the new `page_id` values back to `.confluence-publish.yml`, then publishes the page content. Without `--create-missing-pages`, missing `page_id` values remain an error.
@@ -193,20 +195,16 @@ With `sync.enabled: true`, project publishing checks the manifest state before w
 - Created page IDs, URLs, content hashes, and sync timestamps are written back to `.confluence-publish.yml`.
 - Pages with a matching stored content hash are skipped.
 
-The same policies can be enabled for one run with CLI flags:
+The same policies can be enabled for one run with CLI flags on `plan` and `push`:
 
 ```bash
-uv run publish-confluence \
-  --project docs \
-  --sync \
-  --recreate-missing-root \
-  --recreate-stale-pages \
-  --yes
+uv run publish-confluence plan docs --recreate-missing-root --recreate-stale-pages
+uv run publish-confluence push docs --recreate-missing-root --recreate-stale-pages --yes
 ```
 
-`--recreate-missing-root` and `--recreate-stale-pages` imply `--sync`. Manifest settings do not bypass confirmation; live writes still require `--yes` or an interactive `yes`.
+Manifest settings do not bypass confirmation; live writes still require `--yes` or an interactive `yes`.
 
-Use `--plan-only` to inspect the effective sync settings without rendering, connecting to MCP, or writing anything. Use `--dry-run` to render local previews without connecting to MCP.
+Use `plan` to inspect the effective sync settings without rendering, connecting to MCP, or writing anything. Use `push --dry-run` to render local previews without connecting to MCP.
 
 Sync mode does not delete, move, or reorder Confluence pages. Confluence page titles are unique within a space, so title collisions fail before creation and must be resolved in the manifest.
 
@@ -215,9 +213,7 @@ Sync mode does not delete, move, or reorder Confluence pages. Confluence page ti
 Create a local Markdown project from an existing Confluence page tree:
 
 ```bash
-uv run publish-confluence clone \
-  --url "https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/pages/5164564861/Custom+UI+NEXT+Migration" \
-  --output docs/custom-ui-next-migration
+uv run publish-confluence clone "https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/pages/5164564861/Custom+UI+NEXT+Migration" docs/custom-ui-next-migration
 ```
 
 `clone` reads the Confluence root page and its descendants, converts supported storage XHTML back to Markdown, writes one Markdown file per page, and creates `.confluence-publish.yml` with page IDs, URLs, titles, and `canonical_hash` baselines. It never updates Confluence.
@@ -225,9 +221,9 @@ uv run publish-confluence clone \
 After cloning, use the regular project commands:
 
 ```bash
-uv run publish-confluence --project docs/custom-ui-next-migration --check-sync
-uv run publish-confluence --project docs/custom-ui-next-migration --pull --yes
-uv run publish-confluence --project docs/custom-ui-next-migration --dry-run
+uv run publish-confluence status docs/custom-ui-next-migration
+uv run publish-confluence pull docs/custom-ui-next-migration --yes
+uv run publish-confluence push docs/custom-ui-next-migration --dry-run
 ```
 
 ### Bidirectional Sync Checks
@@ -235,12 +231,10 @@ uv run publish-confluence --project docs/custom-ui-next-migration --dry-run
 Project mode can compare local Markdown with the current Confluence page body:
 
 ```bash
-uv run publish-confluence \
-  --project docs \
-  --check-sync
+uv run publish-confluence status docs
 ```
 
-`--check-sync` reads each mapped Confluence page, converts supported Confluence storage XHTML back to canonical Markdown, and compares it with the local Markdown file. It does not render diagrams, write local files, or update Confluence. The command exits with a non-zero status when it detects unsupported remote content, unknown divergence, or a local/remote conflict.
+`status` reads each mapped Confluence page, converts supported Confluence storage XHTML back to canonical Markdown, and compares it with the local Markdown file. It does not render diagrams, write local files, or update Confluence. The command exits with a non-zero status when it detects unsupported remote content, unknown divergence, or a local/remote conflict.
 
 The reverse conversion currently supports the publisher-owned subset:
 
@@ -258,10 +252,7 @@ Remote macros outside this subset are reported as unsupported instead of being c
 To pull safe remote-only changes back into Markdown:
 
 ```bash
-uv run publish-confluence \
-  --project docs \
-  --pull \
-  --dry-run
+uv run publish-confluence pull docs --dry-run
 ```
 
 Remove `--dry-run` and add `--yes` to update local Markdown files. Pull mode only writes pages whose local content still matches the stored `canonical_hash` baseline and whose remote content changed. It refuses to overwrite local changes, unknown divergence, or unsupported remote content.
@@ -281,10 +272,7 @@ pages:
 Publish with a version comment:
 
 ```bash
-uv run publish-confluence \
-  --project docs \
-  --comment "Sync guide updates" \
-  --yes
+uv run publish-confluence push docs --comment "Sync guide updates" --yes
 ```
 
 ## Diagram Size
@@ -292,11 +280,7 @@ uv run publish-confluence \
 Set the default rendered image width for all diagrams:
 
 ```bash
-uv run publish-confluence \
-  --source /path/to/document.md \
-  --page-id 5151854234 \
-  --diagram-width 1400 \
-  --yes
+uv run publish-confluence push docs --diagram-width 1400 --yes
 ```
 
 Override width per Mermaid block with a first-line directive:
@@ -314,11 +298,7 @@ graph TD
 By default, Mermaid render failures stop publishing. To publish the Mermaid source in Confluence instead of failing:
 
 ```bash
-uv run publish-confluence \
-  --source /path/to/document.md \
-  --page-id 5151854234 \
-  --allow-diagram-fallback \
-  --yes
+uv run publish-confluence push docs --allow-diagram-fallback --yes
 ```
 
 ## Tests

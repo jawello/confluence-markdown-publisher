@@ -11,7 +11,7 @@ This keeps Markdown as the source of truth and avoids depending on manual Gliffy
 ## Goals
 
 - Convert Markdown into Confluence storage XHTML.
-- Publish either one Markdown file or a documentation project folder.
+- Publish documentation project folders through public subcommands.
 - Use a project manifest as the source of truth for Confluence page IDs.
 - Discover Markdown files recursively from a project folder with include and exclude rules.
 - Validate documentation hierarchy with `index.md` as the logical page for a directory.
@@ -53,11 +53,11 @@ The CLI orchestrates the whole publish operation. Most modules are intentionally
 
 | Module | Responsibility |
 |---|---|
-| `cli.py` | Parse arguments, coordinate rendering, conversion, preview, confirmation, and publish. |
+| `cli.py` | Parse public subcommands, coordinate rendering, conversion, preview, confirmation, and publish. |
 | `manifest.py` | Load and validate project manifests. |
 | `project.py` | Discover Markdown files under a project root with include and exclude patterns. |
 | `planner.py` | Build validated project publish plans from discovered files and manifest pages. |
-| `batch.py` | Execute project publish plans by reusing the single-page publishing pipeline. |
+| `batch.py` | Format validated project publish plans. |
 | `sync.py` | Reconcile manifest state with readable Confluence pages, recreate missing pages when policy allows it, and skip unchanged content by hash. |
 | `bidirectional.py` | Compare local Markdown with remote Confluence storage through canonical Markdown hashes and safely pull remote-only changes. |
 | `converter.py` | Find fenced code blocks, collect Mermaid metadata, convert Markdown to storage-ready HTML fragments. |
@@ -67,9 +67,21 @@ The CLI orchestrates the whole publish operation. Most modules are intentionally
 | `mcp_atlassian.py` | Start `mcp-atlassian` through `uvx` and call the Confluence MCP tools. |
 | `models.py` | Define immutable data objects and stable diagram attachment names. |
 
-## Single-Page Publish Flow
+## Public CLI
 
-1. The user runs `publish-confluence` with a source Markdown file and target Confluence page ID.
+The public commands are:
+
+- `clone`: bootstrap a local Markdown project from an existing Confluence page tree.
+- `plan`: validate the project manifest and print the publish plan without rendering or connecting to Confluence.
+- `status`: compare local Markdown, manifest baselines, and current Confluence storage.
+- `pull`: copy safe remote-only Confluence changes back into local Markdown.
+- `push`: render local Markdown and update Confluence.
+
+Single-page publishing is no longer public CLI behavior. Page preparation remains an internal operation used by sync-backed project `push`.
+
+## Page Preparation Flow
+
+1. The project pipeline selects a planned Markdown page and target Confluence page ID.
 2. The CLI reads the Markdown file as UTF-8 text.
 3. `converter.collect_mermaid_blocks()` scans triple-backtick fenced code blocks with language `mermaid`.
 4. Each Mermaid block becomes a `DiagramBlock` with:
@@ -94,7 +106,7 @@ The CLI orchestrates the whole publish operation. Most modules are intentionally
 Project mode starts from a documentation folder instead of a single Markdown file:
 
 ```bash
-publish-confluence --project docs --plan-only
+publish-confluence plan docs
 ```
 
 The default manifest path is `<project>/.confluence-publish.yml`. The manifest stores all Confluence page IDs and optional titles or URLs:
@@ -134,14 +146,14 @@ Project mode flow:
 9. Titles come from manifest `title`, then the first Markdown H1, then the file stem.
 10. Optional `url` values are validated by exact page ID path segment.
 11. The CLI prints the publish plan before rendering or connecting to Confluence.
-12. `--plan-only` exits after validation and plan output.
-13. `--dry-run` renders and converts pages, prints storage previews, and never connects to Confluence.
+12. `plan` exits after validation and plan output.
+13. `push --dry-run` renders and converts pages, prints storage previews, and never connects to Confluence.
 14. Live project publishing asks for confirmation unless `--yes` is passed.
-15. `batch.publish_project()` publishes each planned page through the same single-page rendering and update pipeline.
+15. `push` publishes each planned page through the sync-backed project pipeline.
 
 Project mode does not create Confluence pages by default. Missing `page_id` mappings are planning errors that stop the run before rendering or MCP startup.
 
-When `--create-missing-pages` is enabled, the manifest must provide a parent for missing pages. Legacy manifests provide an existing Confluence root page through `root.page_id`, `root.url`, `root_page_id`, or `root_url`; missing top-level pages are created under that page. Explicit hierarchy manifests set `root.source_path` to the local documentation root and `root.parent_page_id` to the existing Confluence parent; the local root is created under `root.parent_page_id`, and top-level pages without `pages.<path>.parent` are created under `root.source_path`. The planner allows manifest pages without `page_id`, validates explicit parents, detects parent cycles, orders parents before children, and preserves legacy `index.md` hierarchy for manifests without `root.source_path`. Live publishing creates missing pages through `confluence_create_page`, writes the returned `page_id` values back to `.confluence-publish.yml`, then publishes page content through the existing update pipeline. `--plan-only` reports the pages that would be created without connecting to MCP, and `--dry-run` previews storage without creating pages.
+When `--create-missing-pages` is enabled on `plan` or `push`, the manifest must provide a parent for missing pages. Legacy manifests provide an existing Confluence root page through `root.page_id`, `root.url`, `root_page_id`, or `root_url`; missing top-level pages are created under that page. Explicit hierarchy manifests set `root.source_path` to the local documentation root and `root.parent_page_id` to the existing Confluence parent; the local root is created under `root.parent_page_id`, and top-level pages without `pages.<path>.parent` are created under `root.source_path`. The planner allows manifest pages without `page_id`, validates explicit parents, detects parent cycles, orders parents before children, and preserves legacy `index.md` hierarchy for manifests without `root.source_path`. Live publishing creates missing pages through `confluence_create_page`, writes the returned `page_id` values back to `.confluence-publish.yml`, then publishes page content through the existing update pipeline. `plan` reports the pages that would be created without connecting to MCP, and `push --dry-run` previews storage without creating pages.
 
 ## Sync Recovery Flow
 
@@ -171,10 +183,10 @@ pages:
 
 The effective sync policy is the union of manifest settings and CLI flags:
 
-- `sync.enabled: true` or `--sync` routes project publishing through `sync_project()`.
+- `sync.enabled: true` routes project publishing through `sync_project()`.
 - `sync.recreate_missing_root: true` or `--recreate-missing-root` allows root recreation.
 - `sync.recreate_stale_pages: true` or `--recreate-stale-pages` allows non-root stale page recreation.
-- The recreate flags imply sync mode for that run.
+- The recreate flags can be passed to `plan` or `push` for a one-run recovery policy.
 
 Live sync flow:
 
@@ -197,7 +209,7 @@ The content hash includes the page title, generated storage XHTML, output format
 
 After a successful sync update, the manifest also receives a `canonical_hash` for the local Markdown. This hash is separate from `content_hash`: `content_hash` protects the generated storage update path, while `canonical_hash` is the baseline used by bidirectional checks and pull conflict detection.
 
-`--plan-only` stops after plan validation and never renders, connects to MCP, creates pages, or writes the manifest. `--dry-run` renders local storage previews through the sync path without connecting to MCP or writing the manifest.
+`plan` stops after plan validation and never renders, connects to MCP, creates pages, or writes the manifest. `push --dry-run` renders local storage previews through the sync path without connecting to MCP or writing the manifest.
 
 Sync recovery does not delete orphaned Confluence pages, empty trash, move existing pages, or repair remote tree relationships for readable pages. Those operations stay manual because they are destructive or ambiguous in shared Confluence spaces.
 
@@ -206,14 +218,14 @@ Sync recovery does not delete orphaned Confluence pages, empty trash, move exist
 Bidirectional sync is implemented conservatively as a check/pull layer on top of project manifests.
 
 ```bash
-publish-confluence --project docs --check-sync
-publish-confluence --project docs --pull --dry-run
-publish-confluence --project docs --pull --yes
+publish-confluence status docs
+publish-confluence pull docs --dry-run
+publish-confluence pull docs --yes
 ```
 
-`--check-sync` reads the remote storage body for each mapped page, converts the supported storage subset back to canonical Markdown, hashes it, and compares it with the local Markdown hash and the stored `canonical_hash` baseline. It does not write local files or Confluence pages.
+`status` reads the remote storage body for each mapped page, converts the supported storage subset back to canonical Markdown, hashes it, and compares it with the local Markdown hash and the stored `canonical_hash` baseline. It does not write local files or Confluence pages.
 
-`--pull` uses the same comparison but writes local Markdown only for remote-only changes. A page is safe to pull when:
+`pull` uses the same comparison but writes local Markdown only for remote-only changes. A page is safe to pull when:
 
 - the remote storage converts without unsupported macros;
 - the page has a stored `canonical_hash`;
@@ -341,7 +353,7 @@ The default behavior is fail-fast:
 Fallback mode is explicit:
 
 ```bash
-publish-confluence --allow-diagram-fallback ...
+publish-confluence push docs --allow-diagram-fallback ...
 ```
 
 When fallback mode is enabled and a diagram fails to render, the page receives a visible Confluence info panel with the Mermaid source instead of an image attachment.
@@ -352,13 +364,13 @@ The tool is designed for local, operator-driven publishing.
 
 Safety controls:
 
-- `--dry-run` performs rendering and conversion without connecting to Confluence.
-- `--plan-only` validates a project and prints the publish plan without rendering or connecting to Confluence.
+- `push --dry-run` performs rendering and conversion without connecting to Confluence.
+- `plan` validates a project and prints the publish plan without rendering or connecting to Confluence.
 - Live publishing requires an interactive `yes` confirmation unless `--yes` is passed.
 - Attachment names are listed in the preview before publishing.
 - The first part of generated storage is printed before publishing.
 - Normal project mode fails before side effects when discovered Markdown files are missing manifest `page_id` mappings.
-- Create mode has an explicit side effect boundary: no page creation during `--plan-only` or `--dry-run`; live publishing asks for confirmation unless `--yes` is passed.
+- Create mode has an explicit side effect boundary: no page creation during `plan` or `push --dry-run`; live publishing asks for confirmation unless `--yes` is passed.
 - Sync mode keeps the same side effect boundary and also skips existing pages when the stored content hash still matches rendered local content.
 - Project discovery rejects unsafe include and exclude patterns and skips symlinked Markdown paths.
 - Confluence credentials stay in environment variables.
@@ -397,78 +409,41 @@ Live Confluence publishing is treated as an integration check because it depends
 
 ## Operational Usage
 
-Typical dry run:
-
-```bash
-uv run publish-confluence \
-  --source /path/to/document.md \
-  --page-id 5151854234 \
-  --dry-run
-```
-
-Typical publish:
-
-```bash
-uv run publish-confluence \
-  --source /path/to/document.md \
-  --page-id 5151854234 \
-  --title "Page title" \
-  --yes
-```
-
 Project plan preview:
 
 ```bash
-uv run publish-confluence \
-  --project docs \
-  --plan-only
+uv run publish-confluence plan docs
 ```
 
 Project publish:
 
 ```bash
-uv run publish-confluence \
-  --project docs \
-  --comment "Sync guide updates" \
-  --yes
+uv run publish-confluence push docs --comment "Sync guide updates" --yes
 ```
 
 Project sync with manifest defaults:
 
 ```bash
-uv run publish-confluence \
-  --project docs \
-  --yes
+uv run publish-confluence push docs --yes
 ```
 
 One-time sync recovery override:
 
 ```bash
-uv run publish-confluence \
-  --project docs \
-  --sync \
-  --recreate-missing-root \
-  --recreate-stale-pages \
-  --yes
+uv run publish-confluence plan docs --recreate-missing-root --recreate-stale-pages
+uv run publish-confluence push docs --recreate-missing-root --recreate-stale-pages --yes
 ```
 
 When the CLI is used from another repository:
 
 ```bash
-uv run --project ~/Documents/confluence-markdown-publisher publish-confluence \
-  --source en/00-overview.md \
-  --page-id 5123638121 \
-  --dry-run
+uv run --project ~/Documents/confluence-markdown-publisher publish-confluence push docs --dry-run
 ```
 
 If `mmdc` is installed outside the active `PATH`, pass it explicitly:
 
 ```bash
-uv run publish-confluence \
-  --source /path/to/document.md \
-  --page-id 5151854234 \
-  --mmdc-bin /path/to/mmdc \
-  --dry-run
+uv run publish-confluence push docs --mmdc-bin /path/to/mmdc --dry-run
 ```
 
 ## Extension Points
