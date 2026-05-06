@@ -206,10 +206,19 @@ def _table_to_markdown(tag: Tag, unsupported: list[str]) -> str:
     rows = tag.find_all("tr")
     if not rows:
         return ""
+    first_cells = rows[0].find_all(["th", "td"], recursive=False)
+    if not first_cells or any(cell.name.lower() != "th" for cell in first_cells):
+        _add_unsupported(unsupported, "Unsupported Confluence table: first row must use th cells")
+        return ""
     rendered_rows: list[list[str]] = []
     for row in rows:
         cells = row.find_all(["th", "td"], recursive=False)
-        rendered_rows.append([_inline_text(cell, unsupported) for cell in cells])
+        if any(cell.get("rowspan") is not None or cell.get("colspan") is not None for cell in cells):
+            _add_unsupported(unsupported, "Unsupported Confluence table: merged cells")
+            return ""
+        rendered_rows.append(
+            [_inline_text(cell, unsupported).replace("|", r"\|") for cell in cells]
+        )
     if not rendered_rows:
         return ""
     width = max(len(row) for row in rendered_rows)

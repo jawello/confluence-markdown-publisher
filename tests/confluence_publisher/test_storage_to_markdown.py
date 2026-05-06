@@ -214,6 +214,40 @@ def test_storage_lists_and_simple_table_convert_to_markdown():
     )
 
 
+def test_storage_table_escapes_literal_pipes():
+    storage = (
+        "<table><tr><th>Name</th><th>Value</th></tr>"
+        "<tr><td>Region</td><td>us|east1</td></tr></table>"
+    )
+
+    result = storage_to_markdown(storage)
+
+    assert result.unsupported == ()
+    assert result.markdown == (
+        "| Name | Value |\n"
+        "| --- | --- |\n"
+        "| Region | us\\|east1 |\n"
+    )
+
+
+def test_storage_table_without_header_is_reported_as_unsupported():
+    storage = "<table><tr><td>Name</td><td>Value</td></tr></table>"
+
+    result = storage_to_markdown(storage)
+
+    assert result.markdown == ""
+    assert result.unsupported == ("Unsupported Confluence table: first row must use th cells",)
+
+
+def test_storage_table_with_merged_cells_is_reported_as_unsupported():
+    storage = "<table><tr><th>Name</th><th>Value</th></tr><tr><td colspan=\"2\">merged</td></tr></table>"
+
+    result = storage_to_markdown(storage)
+
+    assert result.markdown == ""
+    assert result.unsupported == ("Unsupported Confluence table: merged cells",)
+
+
 def test_storage_nested_lists_convert_to_markdown():
     storage = "<ul><li>Parent<ul><li>Child</li></ul></li><li>Next</li></ul>"
 
