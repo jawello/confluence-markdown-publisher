@@ -6,6 +6,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from . import bidirectional, sync
 from .clone import (
     CloneError,
     clone_confluence_tree,
@@ -270,6 +271,107 @@ async def publish_single_page(
         return prepared.storage
 
 
+def _manifest_path_for(project: Path, manifest: Path | None) -> Path:
+    return manifest or project / ".confluence-publish.yml"
+
+
+def _build_project_plan(
+    args: argparse.Namespace,
+    *,
+    create_missing_pages: bool = False,
+    recreate_missing_root: bool = False,
+    recreate_stale_pages: bool = False,
+):
+    manifest_path = _manifest_path_for(args.project, args.manifest)
+    manifest = load_manifest(manifest_path, allow_missing_page_ids=True)
+    discovery = discover_markdown_files(
+        args.project,
+        include=manifest.include,
+        exclude=manifest.exclude,
+    )
+    return build_publish_plan(
+        project_root=args.project,
+        manifest=manifest,
+        discovered_paths=discovery.included,
+        excluded_count=discovery.excluded_count,
+        version_comment=getattr(args, "comment", None),
+        output_format=args.output_format if getattr(args, "output_format_explicit", False) else None,
+        diagram_width=args.diagram_width if getattr(args, "diagram_width_explicit", False) else None,
+        allow_diagram_fallback=True if getattr(args, "allow_diagram_fallback", False) else None,
+        create_missing_pages=create_missing_pages,
+        sync_enabled=True,
+        recreate_missing_root=recreate_missing_root,
+        recreate_stale_pages=recreate_stale_pages,
+    )
+
+
+async def run_plan_command(args: argparse.Namespace) -> int:
+    from .batch import format_publish_plan
+
+    try:
+        plan = _build_project_plan(
+            args,
+            create_missing_pages=args.create_missing_pages,
+            recreate_missing_root=args.recreate_missing_root,
+            recreate_stale_pages=args.recreate_stale_pages,
+        )
+    except (ManifestError, PlannerError, OSError, ValueError) as exc:
+        raise SystemExit(str(exc)) from exc
+    print(format_publish_plan(plan))
+    return 0
+
+
+async def run_status_command(args: argparse.Namespace) -> int:
+    from .batch import format_publish_plan
+
+    try:
+        plan = _build_project_plan(args)
+    except (ManifestError, PlannerError, OSError, ValueError) as exc:
+        raise SystemExit(str(exc)) from exc
+    print(format_publish_plan(plan))
+    async with connect_mcp_atlassian() as client:
+        report = await bidirectional.check_project_invariants(plan, client=client)
+    print(bidirectional.format_invariant_report(report))
+    return 1 if report.has_conflicts else 0
+
+
+async def run_pull_command(args: argparse.Namespace) -> int:
+    from .batch import format_publish_plan
+
+    try:
+        plan = _build_project_plan(args)
+    except (ManifestError, PlannerError, OSError, ValueError) as exc:
+        raise SystemExit(str(exc)) from exc
+    print(format_publish_plan(plan))
+    if not args.dry_run and not args.yes:
+        answer = input(
+            "Pull remote Confluence changes into local Markdown? "
+            "Type 'yes' to continue: "
+        )
+        if answer != "yes":
+            print("Aborted.")
+            return 1
+
+    sync_error: RuntimeError | None = None
+    async with connect_mcp_atlassian() as client:
+        try:
+            result = await bidirectional.pull_remote_changes(
+                plan,
+                client=client,
+                dry_run=args.dry_run,
+            )
+        except RuntimeError as exc:
+            sync_error = exc
+
+    if sync_error is not None:
+        raise SystemExit(str(sync_error)) from sync_error
+
+    print(bidirectional.format_invariant_report(result.report))
+    pulled = ", ".join(result.updated_paths) if result.updated_paths else "none"
+    print(f"Remote pages to pull: {pulled}")
+    return 0
+
+
 async def run_project_mode(args: argparse.Namespace) -> int:
     from .batch import format_publish_plan, publish_project
     from .bidirectional import (
@@ -277,7 +379,6 @@ async def run_project_mode(args: argparse.Namespace) -> int:
         format_invariant_report,
         pull_remote_changes,
     )
-    from .sync import sync_project
 
     manifest_path = args.manifest or args.project / ".confluence-publish.yml"
     try:
@@ -374,7 +475,7 @@ async def run_project_mode(args: argparse.Namespace) -> int:
                 raise AssertionError("dry-run must not update pages")
 
         if plan.sync_enabled:
-            return await sync_project(
+            return await sync.sync_project(
                 plan,
                 client=DryRunClient(),
                 dry_run=True,
@@ -395,7 +496,7 @@ async def run_project_mode(args: argparse.Namespace) -> int:
 
     async with connect_mcp_atlassian() as client:
         if plan.sync_enabled:
-            return await sync_project(
+            return await sync.sync_project(
                 plan,
                 client=client,
                 dry_run=False,
@@ -437,6 +538,14 @@ async def run_async(argv: Sequence[str] | None = None) -> int:
             return 0
         except CloneError as exc:
             raise SystemExit(str(exc)) from exc
+    if args.command == "plan":
+        return await run_plan_command(args)
+    if args.command == "status":
+        return await run_status_command(args)
+    if args.command == "pull":
+        return await run_pull_command(args)
+    if args.command == "push":
+        raise SystemExit("push command is not implemented yet")
     if args.project is not None:
         return await run_project_mode(args)
 

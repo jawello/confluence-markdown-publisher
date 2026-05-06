@@ -339,7 +339,7 @@ def wrapping_connect_for(client: FakeClient):
 
 
 @pytest.mark.asyncio
-async def test_run_async_project_plan_only_does_not_connect_to_mcp(tmp_path, monkeypatch, capsys):
+async def test_run_async_plan_does_not_connect_to_mcp(tmp_path, monkeypatch, capsys):
     (tmp_path / "index.md").write_text("# Home\n", encoding="utf-8")
     (tmp_path / ".confluence-publish.yml").write_text(
         """
@@ -352,16 +352,39 @@ pages:
     )
 
     def fail_connect():
-        raise AssertionError("plan-only must not connect to MCP")
+        raise AssertionError("plan must not connect to MCP")
 
     monkeypatch.setattr(cli, "connect_mcp_atlassian", fail_connect)
 
-    result = await cli.run_async(["--project", str(tmp_path), "--plan-only"])
+    result = await cli.run_async(["plan", str(tmp_path)])
 
     assert result == 0
     output = capsys.readouterr().out
     assert "Confluence project publish plan" in output
+    assert "Sync: enabled" in output
     assert "index.md -> 111111" in output
+
+
+@pytest.mark.asyncio
+async def test_run_async_push_is_not_implemented_yet(tmp_path, monkeypatch):
+    (tmp_path / "index.md").write_text("# Home\n", encoding="utf-8")
+    (tmp_path / ".confluence-publish.yml").write_text(
+        """
+pages:
+  index.md:
+    page_id: "111111"
+    title: "Home"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    def fail_connect():
+        raise AssertionError("push guard must stop before legacy project mode")
+
+    monkeypatch.setattr(cli, "connect_mcp_atlassian", fail_connect)
+
+    with pytest.raises(SystemExit, match="push command is not implemented yet"):
+        await cli.run_async(["push", str(tmp_path), "--dry-run"])
 
 
 @pytest.mark.asyncio
@@ -657,7 +680,7 @@ pages:
 
 
 @pytest.mark.asyncio
-async def test_run_async_project_check_sync_reads_remote_storage(
+async def test_run_async_status_reads_remote_storage(
     tmp_path, monkeypatch, capsys
 ):
     (tmp_path / "index.md").write_text("# Home\n\nRemote text.\n", encoding="utf-8")
@@ -673,7 +696,7 @@ pages:
     client = FakeClient()
     monkeypatch.setattr(cli, "connect_mcp_atlassian", fake_connect_for(client))
 
-    result = await cli.run_async(["--project", str(tmp_path), "--check-sync"])
+    result = await cli.run_async(["status", str(tmp_path)])
 
     assert result == 0
     assert client.calls == [("get_page_storage", "111111")]
@@ -683,7 +706,31 @@ pages:
 
 
 @pytest.mark.asyncio
-async def test_run_async_project_pull_dry_run_reads_remote_but_does_not_write(
+async def test_run_async_status_returns_nonzero_for_divergence(
+    tmp_path, monkeypatch, capsys
+):
+    (tmp_path / "index.md").write_text("# Home\n\nLocal text.\n", encoding="utf-8")
+    (tmp_path / ".confluence-publish.yml").write_text(
+        """
+pages:
+  index.md:
+    page_id: "111111"
+    title: "Home"
+""".strip(),
+        encoding="utf-8",
+    )
+    client = FakeClient()
+    monkeypatch.setattr(cli, "connect_mcp_atlassian", fake_connect_for(client))
+
+    result = await cli.run_async(["status", str(tmp_path)])
+
+    assert result == 1
+    output = capsys.readouterr().out
+    assert "unknown_divergence" in output
+
+
+@pytest.mark.asyncio
+async def test_run_async_pull_dry_run_reads_remote_but_does_not_write(
     tmp_path, monkeypatch, capsys
 ):
     (tmp_path / "index.md").write_text("# Home\n\nBase text.\n", encoding="utf-8")
@@ -701,7 +748,7 @@ pages:
     client = FakeClient()
     monkeypatch.setattr(cli, "connect_mcp_atlassian", fake_connect_for(client))
 
-    result = await cli.run_async(["--project", str(tmp_path), "--pull", "--dry-run"])
+    result = await cli.run_async(["pull", str(tmp_path), "--dry-run"])
 
     assert result == 0
     assert client.calls == [("get_page_storage", "111111")]
@@ -711,7 +758,7 @@ pages:
 
 
 @pytest.mark.asyncio
-async def test_run_async_project_pull_reports_unsafe_error_after_mcp_shutdown(
+async def test_run_async_pull_reports_unsafe_error_after_mcp_shutdown(
     tmp_path,
     monkeypatch,
 ):
@@ -737,7 +784,7 @@ pages:
     monkeypatch.setattr(bidirectional, "pull_remote_changes", fake_pull_remote_changes)
 
     with pytest.raises(SystemExit, match="unsafe to pull"):
-        await cli.run_async(["--project", str(tmp_path), "--pull", "--dry-run"])
+        await cli.run_async(["pull", str(tmp_path), "--dry-run"])
 
 
 @pytest.mark.asyncio
