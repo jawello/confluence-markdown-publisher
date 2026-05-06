@@ -570,6 +570,63 @@ pages:
 
 
 @pytest.mark.asyncio
+async def test_sync_project_updates_existing_pages_without_space(tmp_path):
+    from confluence_publisher.manifest import load_manifest
+    from confluence_publisher.sync import sync_project
+
+    source = tmp_path / "index.md"
+    source.write_text("# Home\n\nChanged text.\n", encoding="utf-8")
+    manifest_path = tmp_path / ".confluence-publish.yml"
+    manifest_path.write_text(
+        """
+root:
+  page_id: "111111"
+pages:
+  index.md:
+    page_id: "111111"
+    title: "Home"
+    content_hash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    last_synced_at: "2026-04-28T12:00:00Z"
+""".strip(),
+        encoding="utf-8",
+    )
+    plan = PublishPlan(
+        project_root=tmp_path,
+        manifest_path=manifest_path,
+        version_comment="Sync docs",
+        output_format="svg",
+        diagram_width=1000,
+        allow_diagram_fallback=False,
+        excluded_count=0,
+        items=(
+            PlannedPage(
+                "index.md",
+                source,
+                "111111",
+                "Home",
+                None,
+                None,
+                content_hash="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                last_synced_at="2026-04-28T12:00:00Z",
+            ),
+        ),
+        space=None,
+        root_page_id="111111",
+        sync_enabled=True,
+    )
+    client = FakeSyncClient()
+
+    result = await sync_project(plan, client=client, dry_run=False, mmdc_bin="mmdc")
+
+    assert result == 0
+    assert ("update_page_storage", "111111", "Home", "Sync docs") in client.calls
+    assert not any(call[0] == "search_pages_by_title" for call in client.calls)
+    assert not any(call[0] == "create_page" for call in client.calls)
+    manifest = load_manifest(manifest_path)
+    assert manifest.pages["index.md"].content_hash.startswith("sha256:")
+
+
+@pytest.mark.asyncio
 async def test_sync_project_missing_child_page_id_creates_under_root(tmp_path):
     from confluence_publisher.manifest import load_manifest
     from confluence_publisher.sync import prepare_sync_pages, sync_project

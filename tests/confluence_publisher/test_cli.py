@@ -7,6 +7,7 @@ from confluence_publisher import cli
 from confluence_publisher.cli import build_arg_parser, build_preview
 from confluence_publisher.manifest import load_manifest
 from confluence_publisher.models import PageInfo, PageStorage, RenderedDiagram
+from confluence_publisher.planner import PlannedPage, PublishPlan
 
 
 def test_arg_parser_requires_subcommand():
@@ -366,8 +367,8 @@ pages:
 
 
 @pytest.mark.asyncio
-async def test_run_async_push_is_not_implemented_yet(tmp_path, monkeypatch):
-    (tmp_path / "index.md").write_text("# Home\n", encoding="utf-8")
+async def test_run_async_push_dry_run_renders_without_connecting(tmp_path, monkeypatch, capsys):
+    (tmp_path / "index.md").write_text("# Home\n\nPlain text.\n", encoding="utf-8")
     (tmp_path / ".confluence-publish.yml").write_text(
         """
 pages:
@@ -379,12 +380,108 @@ pages:
     )
 
     def fail_connect():
-        raise AssertionError("push guard must stop before legacy project mode")
+        raise AssertionError("push dry-run must not connect to MCP")
 
     monkeypatch.setattr(cli, "connect_mcp_atlassian", fail_connect)
 
-    with pytest.raises(SystemExit, match="push command is not implemented yet"):
-        await cli.run_async(["push", str(tmp_path), "--dry-run"])
+    result = await cli.run_async(["push", str(tmp_path), "--dry-run"])
+
+    assert result == 0
+    output = capsys.readouterr().out
+    assert "Confluence project publish plan" in output
+    assert "Storage preview for index.md:" in output
+    assert "<h1>Home</h1>" in output
+
+
+@pytest.mark.asyncio
+async def test_run_async_push_live_routes_to_sync_project(tmp_path, monkeypatch, capsys):
+    (tmp_path / "index.md").write_text("# Home\n", encoding="utf-8")
+    (tmp_path / ".confluence-publish.yml").write_text(
+        """
+pages:
+  index.md:
+    page_id: "111111"
+    title: "Home"
+""".strip(),
+        encoding="utf-8",
+    )
+    client = FakeClient()
+    calls = []
+
+    async def fake_sync_project(plan, *, client, dry_run, mmdc_bin):
+        calls.append((plan.project_root, client, dry_run, mmdc_bin))
+        return 0
+
+    monkeypatch.setattr(cli, "connect_mcp_atlassian", fake_connect_for(client))
+    monkeypatch.setattr(cli.sync, "sync_project", fake_sync_project)
+
+    result = await cli.run_async(["push", str(tmp_path), "--yes", "--mmdc-bin", "custom-mmdc"])
+
+    assert result == 0
+    assert calls == [(tmp_path, client, False, "custom-mmdc")]
+    assert "Confluence project publish plan" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_run_async_push_passes_recovery_flags_to_plan(tmp_path, monkeypatch):
+    (tmp_path / "index.md").write_text("# Home\n", encoding="utf-8")
+    plan = PublishPlan(
+        project_root=tmp_path,
+        manifest_path=tmp_path / ".confluence-publish.yml",
+        version_comment="Sync documentation from Markdown",
+        output_format="svg",
+        diagram_width=1000,
+        allow_diagram_fallback=False,
+        excluded_count=0,
+        items=(
+            PlannedPage(
+                "index.md",
+                tmp_path / "index.md",
+                "111111",
+                "Home",
+                None,
+                None,
+            ),
+        ),
+        sync_enabled=True,
+    )
+    calls = []
+
+    def fake_build_project_plan(
+        args,
+        *,
+        create_missing_pages=False,
+        recreate_missing_root=False,
+        recreate_stale_pages=False,
+    ):
+        calls.append(
+            (
+                create_missing_pages,
+                recreate_missing_root,
+                recreate_stale_pages,
+            )
+        )
+        return plan
+
+    async def fake_sync_project(plan, *, client, dry_run, mmdc_bin):
+        return 0
+
+    monkeypatch.setattr(cli, "_build_project_plan", fake_build_project_plan)
+    monkeypatch.setattr(cli.sync, "sync_project", fake_sync_project)
+
+    result = await cli.run_async(
+        [
+            "push",
+            str(tmp_path),
+            "--dry-run",
+            "--create-missing-pages",
+            "--recreate-missing-root",
+            "--recreate-stale-pages",
+        ]
+    )
+
+    assert result == 0
+    assert calls == [(True, True, True)]
 
 
 @pytest.mark.asyncio

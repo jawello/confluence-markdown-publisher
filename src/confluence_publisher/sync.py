@@ -287,10 +287,18 @@ def _write_created_identity(
     )
 
 
+def _requires_space_for_creation(plan: PublishPlan) -> bool:
+    return (
+        any(item.page_id is None for item in plan.items)
+        or plan.recreate_missing_root
+        or plan.recreate_stale_pages
+    )
+
+
 async def sync_project(plan: PublishPlan, *, client, dry_run: bool, mmdc_bin: str) -> int:
     if not plan.sync_enabled:
         raise RuntimeError("sync_project requires a sync-enabled plan")
-    if plan.space is None:
+    if plan.space is None and _requires_space_for_creation(plan):
         raise RuntimeError("Cannot sync project without a Confluence space")
 
     if dry_run:

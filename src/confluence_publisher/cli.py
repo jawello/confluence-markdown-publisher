@@ -372,6 +372,50 @@ async def run_pull_command(args: argparse.Namespace) -> int:
     return 0
 
 
+async def run_push_command(args: argparse.Namespace) -> int:
+    from .batch import format_publish_plan
+
+    try:
+        plan = _build_project_plan(
+            args,
+            create_missing_pages=args.create_missing_pages,
+            recreate_missing_root=args.recreate_missing_root,
+            recreate_stale_pages=args.recreate_stale_pages,
+        )
+    except (ManifestError, PlannerError, OSError, ValueError) as exc:
+        raise SystemExit(str(exc)) from exc
+    print(format_publish_plan(plan))
+
+    if args.dry_run:
+        class DryRunClient:
+            async def upload_attachment(self, page_id, file_path):
+                raise AssertionError("dry-run must not upload attachments")
+
+            async def update_page_storage(self, page_id, title, storage, version_comment):
+                raise AssertionError("dry-run must not update pages")
+
+        return await sync.sync_project(
+            plan,
+            client=DryRunClient(),
+            dry_run=True,
+            mmdc_bin=args.mmdc_bin,
+        )
+
+    if not args.yes:
+        answer = input("Push local Markdown changes to Confluence? Type 'yes' to continue: ")
+        if answer != "yes":
+            print("Aborted.")
+            return 1
+
+    async with connect_mcp_atlassian() as client:
+        return await sync.sync_project(
+            plan,
+            client=client,
+            dry_run=False,
+            mmdc_bin=args.mmdc_bin,
+        )
+
+
 async def run_project_mode(args: argparse.Namespace) -> int:
     from .batch import format_publish_plan, publish_project
     from .bidirectional import (
@@ -545,7 +589,7 @@ async def run_async(argv: Sequence[str] | None = None) -> int:
     if args.command == "pull":
         return await run_pull_command(args)
     if args.command == "push":
-        raise SystemExit("push command is not implemented yet")
+        return await run_push_command(args)
     if args.project is not None:
         return await run_project_mode(args)
 
