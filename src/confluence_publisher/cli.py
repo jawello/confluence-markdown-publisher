@@ -320,17 +320,31 @@ async def run_project_mode(args: argparse.Namespace) -> int:
                 print("Aborted.")
                 return 1
 
+        sync_error: RuntimeError | None = None
         async with connect_mcp_atlassian() as client:
-            if args.check_sync:
-                report = await check_project_invariants(plan, client=client)
-                print(format_invariant_report(report))
-                return 1 if report.has_conflicts else 0
+            try:
+                if args.check_sync:
+                    report = await check_project_invariants(plan, client=client)
+                else:
+                    result = await pull_remote_changes(
+                        plan,
+                        client=client,
+                        dry_run=args.dry_run,
+                    )
+            except RuntimeError as exc:
+                sync_error = exc
 
-            result = await pull_remote_changes(plan, client=client, dry_run=args.dry_run)
-            print(format_invariant_report(result.report))
-            pulled = ", ".join(result.updated_paths) if result.updated_paths else "none"
-            print(f"Remote pages to pull: {pulled}")
-            return 0
+        if sync_error is not None:
+            raise SystemExit(str(sync_error)) from sync_error
+
+        if args.check_sync:
+            print(format_invariant_report(report))
+            return 1 if report.has_conflicts else 0
+
+        print(format_invariant_report(result.report))
+        pulled = ", ".join(result.updated_paths) if result.updated_paths else "none"
+        print(f"Remote pages to pull: {pulled}")
+        return 0
 
     if args.dry_run:
         class DryRunClient:
@@ -390,8 +404,14 @@ async def run_async(argv: Sequence[str] | None = None) -> int:
                 max_pages=args.clone_max_pages,
                 dry_run=args.dry_run,
             )
+            clone_error: CloneError | None = None
             async with connect_mcp_atlassian() as client:
-                result = await clone_confluence_tree(request, client=client)
+                try:
+                    result = await clone_confluence_tree(request, client=client)
+                except CloneError as exc:
+                    clone_error = exc
+            if clone_error is not None:
+                raise SystemExit(str(clone_error)) from clone_error
             print(format_clone_summary(result))
             return 0
         except CloneError as exc:

@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 from hashlib import sha256
+from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from .manifest import ManifestPageSyncState, write_manifest_sync_state
 from .planner import PlannedPage, PublishPlan
@@ -148,6 +150,47 @@ def format_invariant_report(report: ProjectInvariantReport) -> str:
     return "\n".join(lines)
 
 
+def _write_pulled_markdown_and_manifest(
+    *,
+    plan: PublishPlan,
+    page: PageInvariant,
+    item: PlannedPage,
+) -> None:
+    if page.remote_markdown is None:
+        raise RuntimeError(f"No remote Markdown available for {page.source_path}")
+
+    temp_path: Path | None = None
+    try:
+        with NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=item.absolute_path.parent,
+            prefix=f".{item.absolute_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temp_file:
+            temp_file.write(page.remote_markdown)
+            temp_path = Path(temp_file.name)
+
+        manifest_before = plan.manifest_path.read_text(encoding="utf-8")
+        write_manifest_sync_state(
+            plan.manifest_path,
+            pages={
+                page.source_path: ManifestPageSyncState(
+                    canonical_hash=compute_canonical_markdown_hash(page.remote_markdown),
+                )
+            },
+        )
+        try:
+            temp_path.replace(item.absolute_path)
+        except Exception:
+            plan.manifest_path.write_text(manifest_before, encoding="utf-8")
+            raise
+    finally:
+        if temp_path is not None and temp_path.exists():
+            temp_path.unlink()
+
+
 async def pull_remote_changes(
     plan: PublishPlan,
     *,
@@ -177,14 +220,10 @@ async def pull_remote_changes(
             continue
         item = items_by_source[page.source_path]
         if not dry_run:
-            item.absolute_path.write_text(page.remote_markdown, encoding="utf-8")
-            write_manifest_sync_state(
-                plan.manifest_path,
-                pages={
-                    page.source_path: ManifestPageSyncState(
-                        canonical_hash=compute_canonical_markdown_hash(page.remote_markdown),
-                    )
-                },
+            _write_pulled_markdown_and_manifest(
+                plan=plan,
+                page=page,
+                item=item,
             )
         updated_paths.append(page.source_path)
 

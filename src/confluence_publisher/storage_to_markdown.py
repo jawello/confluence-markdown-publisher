@@ -18,6 +18,10 @@ _PANEL_PREFIXES = {
     "note": "Note",
     "tip": "Tip",
 }
+_MARKDOWN_FENCE_RE = re.compile(r"(?m)^[ \t]{0,3}```")
+_PUBLISHER_MERMAID_IMAGE_RE = re.compile(
+    r"^diagram-.+-\d{2}-[0-9a-f]{8}\.(?:png|svg)$"
+)
 
 
 def _attr(tag: Tag, name: str) -> str | None:
@@ -49,11 +53,17 @@ def _parameter_text(tag: Tag, name: str) -> str | None:
     return None
 
 
-def _code_macro_to_markdown(tag: Tag) -> str:
+def _code_macro_to_markdown(tag: Tag, unsupported: list[str]) -> str:
     language = _parameter_text(tag, "language") or "text"
     body = tag.find("ac:plain-text-body")
     source = _plain_text(body) if body is not None else ""
     source = source.rstrip("\n")
+    if _MARKDOWN_FENCE_RE.search(source):
+        _add_unsupported(
+            unsupported,
+            "Unsupported Confluence code macro: contains Markdown fence delimiter",
+        )
+        return ""
     return f"```{language}\n{source}\n```\n"
 
 
@@ -71,6 +81,15 @@ def _inline_markdown(node, unsupported: list[str]) -> str:
     if name == "img":
         _image_to_markdown(node, unsupported)
         return ""
+    if name == "code":
+        text = node.get_text("", strip=False)
+        if "`" in text:
+            _add_unsupported(
+                unsupported,
+                "Unsupported Confluence inline code: contains Markdown backtick",
+            )
+            return text
+        return f"`{text}`"
     if name.startswith(("ac:", "ri:")):
         _add_unsupported(unsupported, f"Unsupported Confluence element: {name}")
         return ""
@@ -80,8 +99,6 @@ def _inline_markdown(node, unsupported: list[str]) -> str:
         return f"**{children.strip()}**"
     if name in {"em", "i"}:
         return f"*{children.strip()}*"
-    if name == "code":
-        return f"`{node.get_text('', strip=False)}`"
     if name == "a":
         href = _attr(node, "href")
         text = children.strip()
@@ -165,14 +182,24 @@ def _task_list_to_markdown(
 
 
 def _image_to_markdown(tag: Tag, unsupported: list[str]) -> str:
-    if tag.name.lower() == "img":
-        label = _attr(tag, "alt") or _attr(tag, "src")
-    else:
-        attachment = tag.find("ri:attachment")
-        label = _attr(attachment, "ri:filename") if attachment is not None else None
+    label = _image_label(tag)
     suffix = f": {label}" if label is not None else ""
     _add_unsupported(unsupported, f"Unsupported Confluence image{suffix}")
     return ""
+
+
+def _image_label(tag: Tag) -> str | None:
+    if tag.name.lower() == "img":
+        return _attr(tag, "alt") or _attr(tag, "src")
+    attachment = tag.find("ri:attachment")
+    return _attr(attachment, "ri:filename") if attachment is not None else None
+
+
+def _is_publisher_mermaid_image(tag: Tag) -> bool:
+    label = _image_label(tag)
+    if label is None:
+        return False
+    return _PUBLISHER_MERMAID_IMAGE_RE.fullmatch(label) is not None
 
 
 def _table_to_markdown(tag: Tag, unsupported: list[str]) -> str:
@@ -228,14 +255,25 @@ def _list_to_markdown(
 
 
 def _expand_to_markdown(tag: Tag, unsupported: list[str]) -> str:
-    title = _parameter_text(tag, "title")
+    unsupported.append("Unsupported Confluence macro: expand")
+    return ""
+
+
+def _mermaid_source_code(tag: Tag) -> Tag | None:
+    if _macro_name(tag) != "expand" or _parameter_text(tag, "title") != "Mermaid source":
+        return None
     body = _rich_body(tag)
     code = body.find("ac:structured-macro", attrs={"ac:name": "code"}) if body else None
     language = _parameter_text(code, "language") if code is not None else None
-    if title == "Mermaid source" and code is not None and language == "mermaid":
-        return _code_macro_to_markdown(code)
-    unsupported.append("Unsupported Confluence macro: expand")
-    return ""
+    return code if language == "mermaid" else None
+
+
+def _mermaid_expand_to_markdown(tag: Tag, unsupported: list[str]) -> str:
+    code = _mermaid_source_code(tag)
+    if code is None:
+        _add_unsupported(unsupported, "Unsupported Confluence macro: expand")
+        return ""
+    return _code_macro_to_markdown(code, unsupported)
 
 
 def _macro_to_markdown(tag: Tag, unsupported: list[str]) -> str:
@@ -243,7 +281,7 @@ def _macro_to_markdown(tag: Tag, unsupported: list[str]) -> str:
     if name == "toc":
         return ""
     if name == "code":
-        return _code_macro_to_markdown(tag)
+        return _code_macro_to_markdown(tag, unsupported)
     if name in _PANEL_PREFIXES:
         return _panel_to_markdown(tag, name, unsupported)
     if name == "expand":
@@ -283,7 +321,10 @@ def _children_to_markdown(tag: Tag | None, unsupported: list[str]) -> str:
         return ""
     parts: list[str] = []
     children = list(tag.children)
+    skip_indexes: set[int] = set()
     for index, child in enumerate(children):
+        if index in skip_indexes:
+            continue
         if isinstance(child, NavigableString):
             text = str(child).strip()
             if text:
@@ -292,12 +333,21 @@ def _children_to_markdown(tag: Tag | None, unsupported: list[str]) -> str:
         if not isinstance(child, Tag):
             continue
         if child.name.lower() in {"ac:image", "img"}:
-            next_tags = [item for item in children[index + 1 :] if isinstance(item, Tag)]
-            if next_tags and next_tags[0].name == "ac:structured-macro":
-                next_name = _macro_name(next_tags[0])
-                next_title = _parameter_text(next_tags[0], "title")
-                if next_name == "expand" and next_title == "Mermaid source":
+            handled_pair = False
+            for next_index, next_child in enumerate(children[index + 1 :], start=index + 1):
+                if not isinstance(next_child, Tag):
                     continue
+                if (
+                    next_child.name == "ac:structured-macro"
+                    and _is_publisher_mermaid_image(child)
+                    and _mermaid_source_code(next_child) is not None
+                ):
+                    parts.append(_mermaid_expand_to_markdown(next_child, unsupported))
+                    skip_indexes.add(next_index)
+                    handled_pair = True
+                break
+            if handled_pair:
+                continue
         parts.append(_tag_to_markdown(child, unsupported))
     return "\n\n".join(part.strip("\n") for part in parts if part.strip("\n")) + (
         "\n" if any(part.strip("\n") for part in parts) else ""

@@ -283,6 +283,33 @@ async def test_run_async_clone_preserves_root_dry_run(tmp_path, monkeypatch, cap
     assert "Confluence clone dry run" in capsys.readouterr().out
 
 
+@pytest.mark.asyncio
+async def test_run_async_clone_reports_clone_errors_after_mcp_shutdown(
+    tmp_path,
+    monkeypatch,
+):
+    from confluence_publisher.clone import CloneError
+
+    async def fake_clone_confluence_tree(request, *, client):
+        raise CloneError("Unsupported Confluence content: jira")
+
+    client = FakeClient()
+    monkeypatch.setattr(cli, "connect_mcp_atlassian", wrapping_connect_for(client))
+    monkeypatch.setattr(cli, "clone_confluence_tree", fake_clone_confluence_tree)
+
+    with pytest.raises(SystemExit, match="Unsupported Confluence content: jira"):
+        await cli.run_async(
+            [
+                "clone",
+                "--url",
+                "https://criteo.atlassian.net/wiki/spaces/~6393203da593cb822e995262/"
+                "pages/5164564861/Custom+UI+NEXT+Migration",
+                "--output",
+                str(tmp_path / "docs"),
+            ]
+        )
+
+
 class FakeClient:
     def __init__(self, title: str = "Fetched Title") -> None:
         self.title = title
@@ -348,6 +375,26 @@ def fake_connect_for(client: FakeClient):
     @asynccontextmanager
     async def fake_connect():
         yield client
+
+    return fake_connect
+
+
+class WrappingConnect:
+    def __init__(self, client: FakeClient) -> None:
+        self.client = client
+
+    async def __aenter__(self):
+        return self.client
+
+    async def __aexit__(self, exc_type, exc, tb):
+        if exc is not None:
+            raise ExceptionGroup("wrapped MCP shutdown", [exc])
+        return False
+
+
+def wrapping_connect_for(client: FakeClient):
+    def fake_connect():
+        return WrappingConnect(client)
 
     return fake_connect
 
@@ -722,6 +769,36 @@ pages:
     assert (tmp_path / "index.md").read_text(encoding="utf-8") == "# Home\n\nBase text.\n"
     output = capsys.readouterr().out
     assert "Remote pages to pull: index.md" in output
+
+
+@pytest.mark.asyncio
+async def test_run_async_project_pull_reports_unsafe_error_after_mcp_shutdown(
+    tmp_path,
+    monkeypatch,
+):
+    (tmp_path / "index.md").write_text("# Home\n\nBase text.\n", encoding="utf-8")
+    (tmp_path / ".confluence-publish.yml").write_text(
+        """
+pages:
+  index.md:
+    page_id: "111111"
+    title: "Home"
+    canonical_hash: "sha256:placeholder"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    async def fake_pull_remote_changes(plan, *, client, dry_run):
+        raise RuntimeError("Remote changes are unsafe to pull: index.md (conflict)")
+
+    import confluence_publisher.bidirectional as bidirectional
+
+    client = FakeClient()
+    monkeypatch.setattr(cli, "connect_mcp_atlassian", wrapping_connect_for(client))
+    monkeypatch.setattr(bidirectional, "pull_remote_changes", fake_pull_remote_changes)
+
+    with pytest.raises(SystemExit, match="unsafe to pull"):
+        await cli.run_async(["--project", str(tmp_path), "--pull", "--dry-run"])
 
 
 @pytest.mark.asyncio

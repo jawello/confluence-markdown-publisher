@@ -158,6 +158,45 @@ pages:
 
 
 @pytest.mark.asyncio
+async def test_pull_remote_changes_keeps_markdown_when_manifest_update_fails(
+    tmp_path,
+    monkeypatch,
+):
+    manifest_path = tmp_path / ".confluence-publish.yml"
+    baseline = compute_canonical_markdown_hash("# Home\n\nBase text.\n")
+    manifest_path.write_text(
+        f"""
+pages:
+  index.md:
+    page_id: "111111"
+    canonical_hash: "{baseline}"
+""".strip(),
+        encoding="utf-8",
+    )
+    plan = make_plan(
+        tmp_path,
+        local_text="# Home\n\nBase text.\n",
+        canonical_hash=baseline,
+    )
+    plan = PublishPlan(**{**plan.__dict__, "manifest_path": manifest_path})
+    client = FakeContentClient({"111111": page_storage("<h1>Home</h1><p>Remote text.</p>")})
+
+    def fail_manifest_update(*args, **kwargs):
+        raise RuntimeError("manifest write failed")
+
+    monkeypatch.setattr(
+        "confluence_publisher.bidirectional.write_manifest_sync_state",
+        fail_manifest_update,
+    )
+
+    with pytest.raises(RuntimeError, match="manifest write failed"):
+        await pull_remote_changes(plan, client=client, dry_run=False)
+
+    assert (tmp_path / "index.md").read_text(encoding="utf-8") == "# Home\n\nBase text.\n"
+    assert list(tmp_path.glob(".*.tmp")) == []
+
+
+@pytest.mark.asyncio
 async def test_pull_remote_changes_refuses_unknown_divergence(tmp_path):
     plan = make_plan(tmp_path, local_text="# Home\n\nLocal text.\n")
     client = FakeContentClient({"111111": page_storage("<h1>Home</h1><p>Remote text.</p>")})

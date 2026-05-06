@@ -17,6 +17,22 @@ def test_storage_code_macro_converts_to_markdown_fence():
     assert result.markdown == "```bash\necho hello\n```\n"
 
 
+def test_storage_code_macro_with_markdown_fence_is_reported_as_unsupported():
+    storage = (
+        '<ac:structured-macro ac:name="code">'
+        '<ac:parameter ac:name="language">bash</ac:parameter>'
+        "<ac:plain-text-body><![CDATA[echo before\n```\necho after]]></ac:plain-text-body>"
+        "</ac:structured-macro>"
+    )
+
+    result = storage_to_markdown(storage)
+
+    assert result.markdown == ""
+    assert result.unsupported == (
+        "Unsupported Confluence code macro: contains Markdown fence delimiter",
+    )
+
+
 def test_storage_mermaid_image_with_source_expand_converts_to_mermaid_fence():
     storage = (
         '<ac:image ac:alt="Mermaid diagram" ac:width="1000">'
@@ -37,6 +53,31 @@ def test_storage_mermaid_image_with_source_expand_converts_to_mermaid_fence():
 
     assert result.unsupported == ()
     assert result.markdown == "```mermaid\ngraph LR\nA --> B\n```\n"
+
+
+def test_storage_non_publisher_image_with_mermaid_source_is_reported_as_unsupported():
+    storage = (
+        '<ac:image ac:alt="Architecture">'
+        '<ri:attachment ri:filename="architecture.png" />'
+        "</ac:image>"
+        '<ac:structured-macro ac:name="expand">'
+        '<ac:parameter ac:name="title">Mermaid source</ac:parameter>'
+        "<ac:rich-text-body>"
+        '<ac:structured-macro ac:name="code">'
+        '<ac:parameter ac:name="language">mermaid</ac:parameter>'
+        "<ac:plain-text-body><![CDATA[graph LR\nA --> B]]></ac:plain-text-body>"
+        "</ac:structured-macro>"
+        "</ac:rich-text-body>"
+        "</ac:structured-macro>"
+    )
+
+    result = storage_to_markdown(storage)
+
+    assert result.markdown == ""
+    assert result.unsupported == (
+        "Unsupported Confluence image: architecture.png",
+        "Unsupported Confluence macro: expand",
+    )
 
 
 def test_storage_mermaid_html_image_with_source_expand_converts_to_mermaid_fence():
@@ -73,6 +114,16 @@ def test_storage_common_inline_markup_converts_to_markdown():
     assert result.markdown == (
         "Use **bold**, *italic*, `kubectl get pods`, and "
         "[docs](https://example.com/docs).\n"
+    )
+
+
+def test_storage_inline_code_with_backtick_is_reported_as_unsupported():
+    storage = "<p>Use <code>`literal`</code>.</p>"
+
+    result = storage_to_markdown(storage)
+
+    assert result.unsupported == (
+        "Unsupported Confluence inline code: contains Markdown backtick",
     )
 
 
