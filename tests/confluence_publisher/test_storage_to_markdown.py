@@ -39,6 +39,27 @@ def test_storage_mermaid_image_with_source_expand_converts_to_mermaid_fence():
     assert result.markdown == "```mermaid\ngraph LR\nA --> B\n```\n"
 
 
+def test_storage_mermaid_html_image_with_source_expand_converts_to_mermaid_fence():
+    storage = (
+        '<img alt="diagram-page-01-a1b2c3d4.svg" '
+        'src="https://example.atlassian.net/wiki/download/attachments/1/diagram.svg" />'
+        '<ac:structured-macro ac:name="expand">'
+        '<ac:parameter ac:name="title">Mermaid source</ac:parameter>'
+        "<ac:rich-text-body>"
+        '<ac:structured-macro ac:name="code">'
+        '<ac:parameter ac:name="language">mermaid</ac:parameter>'
+        "<ac:plain-text-body><![CDATA[graph LR\nA --> B]]></ac:plain-text-body>"
+        "</ac:structured-macro>"
+        "</ac:rich-text-body>"
+        "</ac:structured-macro>"
+    )
+
+    result = storage_to_markdown(storage)
+
+    assert result.unsupported == ()
+    assert result.markdown == "```mermaid\ngraph LR\nA --> B\n```\n"
+
+
 def test_storage_common_inline_markup_converts_to_markdown():
     storage = (
         "<p>Use <strong>bold</strong>, <em>italic</em>, "
@@ -93,6 +114,15 @@ def test_storage_standalone_image_is_reported_as_unsupported():
     assert result.unsupported == ("Unsupported Confluence image: architecture.png",)
 
 
+def test_storage_standalone_html_image_is_reported_as_unsupported():
+    storage = '<p><img alt="Architecture" src="https://example.com/architecture.png" /></p>'
+
+    result = storage_to_markdown(storage)
+
+    assert result.markdown == ""
+    assert result.unsupported == ("Unsupported Confluence image: Architecture",)
+
+
 def test_storage_confluence_link_is_reported_as_unsupported():
     storage = '<p>See <ac:link><ri:page ri:content-title="Target" /></ac:link>.</p>'
 
@@ -130,6 +160,61 @@ def test_storage_lists_and_simple_table_convert_to_markdown():
         "| Name | Value |\n"
         "| --- | --- |\n"
         "| Region | us-east1 |\n"
+    )
+
+
+def test_storage_nested_lists_convert_to_markdown():
+    storage = "<ul><li>Parent<ul><li>Child</li></ul></li><li>Next</li></ul>"
+
+    result = storage_to_markdown(storage)
+
+    assert result.unsupported == ()
+    assert result.markdown == "- Parent\n  - Child\n- Next\n"
+
+
+def test_storage_task_body_nested_lists_convert_to_markdown_children():
+    storage = (
+        "<ac:task-list>"
+        "<ac:task><ac:task-status>incomplete</ac:task-status>"
+        "<ac:task-body>GCP APIs enabled:<ul>"
+        "<li><code>sqladmin.googleapis.com</code></li>"
+        "<li><code>container.googleapis.com</code></li>"
+        "</ul></ac:task-body></ac:task>"
+        "</ac:task-list>"
+    )
+
+    result = storage_to_markdown(storage)
+
+    assert result.unsupported == ()
+    assert result.markdown == (
+        "- [ ] GCP APIs enabled:\n"
+        "  - `sqladmin.googleapis.com`\n"
+        "  - `container.googleapis.com`\n"
+    )
+
+
+def test_storage_task_body_nested_task_list_converts_to_markdown_children():
+    storage = (
+        "<ac:task-list>"
+        "<ac:task><ac:task-status>incomplete</ac:task-status>"
+        "<ac:task-body>config.yaml updated:<ac:task-list>"
+        "<ac:task><ac:task-status>incomplete</ac:task-status>"
+        "<ac:task-body>IAM profiles point to <code>{GCP_PROJECT}</code></ac:task-body>"
+        "</ac:task>"
+        "<ac:task><ac:task-status>complete</ac:task-status>"
+        "<ac:task-body>Service accounts are correct</ac:task-body>"
+        "</ac:task>"
+        "</ac:task-list></ac:task-body></ac:task>"
+        "</ac:task-list>"
+    )
+
+    result = storage_to_markdown(storage)
+
+    assert result.unsupported == ()
+    assert result.markdown == (
+        "- [ ] config.yaml updated:\n"
+        "  - [ ] IAM profiles point to `{GCP_PROJECT}`\n"
+        "  - [x] Service accounts are correct\n"
     )
 
 

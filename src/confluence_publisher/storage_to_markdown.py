@@ -38,6 +38,10 @@ def _add_unsupported(unsupported: list[str], message: str) -> None:
         unsupported.append(message)
 
 
+def _normalize_inline_text(raw: str) -> str:
+    return re.sub(r"[ \t\r\n]+", " ", raw).strip()
+
+
 def _parameter_text(tag: Tag, name: str) -> str | None:
     for parameter in tag.find_all("ac:parameter"):
         if _attr(parameter, "ac:name") == name:
@@ -64,6 +68,9 @@ def _inline_markdown(node, unsupported: list[str]) -> str:
         return ""
 
     name = node.name.lower()
+    if name == "img":
+        _image_to_markdown(node, unsupported)
+        return ""
     if name.startswith(("ac:", "ri:")):
         _add_unsupported(unsupported, f"Unsupported Confluence element: {name}")
         return ""
@@ -89,7 +96,7 @@ def _inline_markdown(node, unsupported: list[str]) -> str:
 
 def _inline_text(tag: Tag, unsupported: list[str]) -> str:
     raw = "".join(_inline_markdown(child, unsupported) for child in tag.children)
-    return re.sub(r"[ \t\r\n]+", " ", raw).strip()
+    return _normalize_inline_text(raw)
 
 
 def _panel_to_markdown(tag: Tag, name: str, unsupported: list[str]) -> str:
@@ -100,21 +107,70 @@ def _panel_to_markdown(tag: Tag, name: str, unsupported: list[str]) -> str:
     return f"> {prefix}: {text}\n"
 
 
-def _task_list_to_markdown(tag: Tag, unsupported: list[str]) -> str:
+def _task_body_to_markdown(
+    tag: Tag,
+    unsupported: list[str],
+    nested_indent: str = "  ",
+) -> str:
+    inline_parts: list[str] = []
+    nested_lines: list[str] = []
+    for child in tag.children:
+        if isinstance(child, Tag) and child.name.lower() in {"ul", "ol"}:
+            nested = _list_to_markdown(
+                child,
+                ordered=child.name.lower() == "ol",
+                unsupported=unsupported,
+                indent=nested_indent,
+            ).rstrip("\n")
+            if nested:
+                nested_lines.extend(nested.splitlines())
+            continue
+        if isinstance(child, Tag) and child.name.lower() == "ac:task-list":
+            nested = _task_list_to_markdown(
+                child,
+                unsupported=unsupported,
+                indent=nested_indent,
+            ).rstrip("\n")
+            if nested:
+                nested_lines.extend(nested.splitlines())
+            continue
+        inline_parts.append(_inline_markdown(child, unsupported))
+
+    text = _normalize_inline_text("".join(inline_parts))
+    lines = [text] if text else []
+    lines.extend(nested_lines)
+    return "\n".join(lines)
+
+
+def _task_list_to_markdown(
+    tag: Tag,
+    unsupported: list[str],
+    indent: str = "",
+) -> str:
     lines: list[str] = []
     for task in tag.find_all("ac:task", recursive=False):
         status = task.find("ac:task-status")
         body = task.find("ac:task-body")
         marker = "x" if status is not None and status.get_text(strip=True) == "complete" else " "
-        text = _inline_text(body, unsupported) if body is not None else ""
-        lines.append(f"- [{marker}] {text}")
+        text = (
+            _task_body_to_markdown(body, unsupported, nested_indent=f"{indent}  ")
+            if body is not None
+            else ""
+        )
+        body_lines = text.splitlines()
+        first_line = body_lines[0] if body_lines else ""
+        lines.append(f"{indent}- [{marker}] {first_line}".rstrip())
+        lines.extend(body_lines[1:])
     return "\n".join(lines) + ("\n" if lines else "")
 
 
 def _image_to_markdown(tag: Tag, unsupported: list[str]) -> str:
-    attachment = tag.find("ri:attachment")
-    filename = _attr(attachment, "ri:filename") if attachment is not None else None
-    suffix = f": {filename}" if filename is not None else ""
+    if tag.name.lower() == "img":
+        label = _attr(tag, "alt") or _attr(tag, "src")
+    else:
+        attachment = tag.find("ri:attachment")
+        label = _attr(attachment, "ri:filename") if attachment is not None else None
+    suffix = f": {label}" if label is not None else ""
     _add_unsupported(unsupported, f"Unsupported Confluence image{suffix}")
     return ""
 
@@ -142,11 +198,32 @@ def _table_to_markdown(tag: Tag, unsupported: list[str]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _list_to_markdown(tag: Tag, ordered: bool, unsupported: list[str]) -> str:
+def _list_to_markdown(
+    tag: Tag,
+    ordered: bool,
+    unsupported: list[str],
+    indent: str = "",
+) -> str:
     lines: list[str] = []
     for index, item in enumerate(tag.find_all("li", recursive=False), start=1):
         marker = f"{index}." if ordered else "-"
-        lines.append(f"{marker} {_inline_text(item, unsupported)}")
+        inline_parts: list[str] = []
+        nested_lines: list[str] = []
+        for child in item.children:
+            if isinstance(child, Tag) and child.name.lower() in {"ul", "ol"}:
+                nested = _list_to_markdown(
+                    child,
+                    ordered=child.name.lower() == "ol",
+                    unsupported=unsupported,
+                    indent=f"{indent}  ",
+                ).rstrip("\n")
+                if nested:
+                    nested_lines.extend(nested.splitlines())
+                continue
+            inline_parts.append(_inline_markdown(child, unsupported))
+        text = _normalize_inline_text("".join(inline_parts))
+        lines.append(f"{indent}{marker} {text}".rstrip())
+        lines.extend(nested_lines)
     return "\n".join(lines) + ("\n" if lines else "")
 
 
@@ -181,7 +258,7 @@ def _tag_to_markdown(tag: Tag, unsupported: list[str]) -> str:
         return _macro_to_markdown(tag, unsupported)
     if name == "ac:task-list":
         return _task_list_to_markdown(tag, unsupported)
-    if name == "ac:image":
+    if name in {"ac:image", "img"}:
         return _image_to_markdown(tag, unsupported)
     if name in {"h1", "h2", "h3", "h4", "h5", "h6"}:
         level = int(name[1])
@@ -214,7 +291,7 @@ def _children_to_markdown(tag: Tag | None, unsupported: list[str]) -> str:
             continue
         if not isinstance(child, Tag):
             continue
-        if child.name == "ac:image":
+        if child.name.lower() in {"ac:image", "img"}:
             next_tags = [item for item in children[index + 1 :] if isinstance(item, Tag)]
             if next_tags and next_tags[0].name == "ac:structured-macro":
                 next_name = _macro_name(next_tags[0])
