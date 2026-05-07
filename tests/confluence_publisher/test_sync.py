@@ -1043,6 +1043,71 @@ pages:
 
 
 @pytest.mark.asyncio
+async def test_sync_project_recreates_missing_root_before_other_top_level_pages(tmp_path):
+    from confluence_publisher.manifest import load_manifest
+    from confluence_publisher.sync import sync_project
+
+    home = tmp_path / "index.md"
+    overview = tmp_path / "00-overview.md"
+    home.write_text("# Home\n\nPlain text.\n", encoding="utf-8")
+    overview.write_text("# Overview\n\nPlain text.\n", encoding="utf-8")
+    manifest_path = tmp_path / ".confluence-publish.yml"
+    manifest_path.write_text(
+        """
+space: "~6393203da593cb822e995262"
+root:
+  parent_page_id: "2163738446"
+  page_id: "old-root"
+pages:
+  index.md:
+    page_id: "old-home"
+    title: "Home"
+  00-overview.md:
+    page_id: "old-root"
+    title: "Overview"
+""".strip(),
+        encoding="utf-8",
+    )
+    plan = PublishPlan(
+        project_root=tmp_path,
+        manifest_path=manifest_path,
+        version_comment="Sync docs",
+        output_format="svg",
+        diagram_width=1000,
+        allow_diagram_fallback=False,
+        excluded_count=0,
+        items=(
+            PlannedPage("index.md", home, "old-home", "Home", None, None),
+            PlannedPage("00-overview.md", overview, "old-root", "Overview", None, None),
+        ),
+        space="~6393203da593cb822e995262",
+        root_page_id="old-root",
+        root_parent_page_id="2163738446",
+        sync_enabled=True,
+        recreate_missing_root=True,
+    )
+    client = FakeSyncClient(
+        page_errors={"old-root": McpToolError("page old-root not found")}
+    )
+
+    result = await sync_project(plan, client=client, dry_run=False, mmdc_bin="mmdc")
+
+    assert result == 0
+    assert client.calls[:6] == [
+        ("get_page", "old-root"),
+        ("get_page", "2163738446"),
+        ("search_pages_by_title", "~6393203da593cb822e995262", "Home"),
+        ("search_pages_by_title", "~6393203da593cb822e995262", "Overview"),
+        ("create_page", "~6393203da593cb822e995262", "Overview", "2163738446", "800001"),
+        ("create_page", "~6393203da593cb822e995262", "Home", "800001", "800002"),
+    ]
+    manifest = load_manifest(manifest_path)
+    assert manifest.root_page_id == "800001"
+    assert manifest.pages["00-overview.md"].page_id == "800001"
+    assert manifest.pages["index.md"].page_id == "800002"
+
+
+@pytest.mark.asyncio
 async def test_sync_project_recreated_identities_are_written_before_publish_failure(tmp_path):
     from confluence_publisher.manifest import load_manifest
     from confluence_publisher.sync import sync_project

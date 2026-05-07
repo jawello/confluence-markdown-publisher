@@ -508,14 +508,18 @@ async def _create_planned_pages(
     root_page_id: str | None = None
     root_url: str | None = None
     create_paths = set(execution.create_source_paths)
+    create_items = [item for item in plan.items if item.source_path in create_paths]
 
     if execution.requires_title_preflight:
-        create_items = [item for item in plan.items if item.source_path in create_paths]
         await _preflight_titles(plan, client=client, items=create_items)
 
-    for item in plan.items:
-        if item.source_path not in create_paths:
-            continue
+    creation_items = create_items
+    if execution.root_item.source_path in create_paths:
+        creation_items = [execution.root_item] + [
+            item for item in create_items if item.source_path != execution.root_item.source_path
+        ]
+
+    for item in creation_items:
         parent_id = _parent_id_for(
             item,
             plan=plan,
