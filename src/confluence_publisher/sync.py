@@ -442,6 +442,41 @@ def build_sync_execution_plan(
     )
 
 
+async def collect_sync_remote_state(plan: PublishPlan, *, client) -> SyncRemoteState:
+    root = _root_item(plan)
+    missing_pages = tuple(item for item in plan.items if item.page_id is None)
+    checked: dict[str, bool] = {}
+    root_readable: bool | None = None
+
+    if root.page_id is not None:
+        try:
+            await client.get_page(root.page_id)
+        except McpToolError:
+            root_readable = False
+            return SyncRemoteState(
+                root_readable=root_readable,
+                readable_by_page_id={root.page_id: False},
+                missing_pages=missing_pages,
+                stale_pages=(),
+            )
+        else:
+            root_readable = True
+            checked[root.page_id] = True
+
+    readable = await _readable_page_ids(plan, client=client, checked=checked)
+    stale_pages = tuple(
+        item
+        for item in plan.items
+        if item.page_id is not None and readable.get(item.page_id) is False
+    )
+    return SyncRemoteState(
+        root_readable=root_readable,
+        readable_by_page_id=readable,
+        missing_pages=missing_pages,
+        stale_pages=stale_pages,
+    )
+
+
 async def sync_project(plan: PublishPlan, *, client, dry_run: bool, mmdc_bin: str) -> int:
     if not plan.sync_enabled:
         raise RuntimeError("sync_project requires a sync-enabled plan")

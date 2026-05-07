@@ -273,6 +273,35 @@ def test_build_sync_execution_plan_recreates_stale_ancestor_with_descendants(tmp
     assert execution.requires_title_preflight is True
 
 
+@pytest.mark.asyncio
+async def test_collect_sync_remote_state_marks_stale_pages_after_root_is_readable(tmp_path):
+    from confluence_publisher.sync import collect_sync_remote_state
+
+    child_dir = tmp_path / "guide"
+    child_dir.mkdir()
+    root = tmp_path / "index.md"
+    child = child_dir / "index.md"
+    root.write_text("# Home\n\nPlain text.\n", encoding="utf-8")
+    child.write_text("# Guide\n\nPlain text.\n", encoding="utf-8")
+    child_page = PlannedPage("guide/index.md", child, "222222", "Guide", None, "index.md")
+    plan = sync_plan(
+        tmp_path,
+        items=(
+            PlannedPage("index.md", root, "111111", "Home", None, None),
+            child_page,
+        ),
+    )
+    client = FakeSyncClient(page_errors={"222222": McpToolError("page 222222 not found")})
+
+    state = await collect_sync_remote_state(plan, client=client)
+
+    assert state.root_readable is True
+    assert state.readable_by_page_id == {"111111": True, "222222": False}
+    assert state.missing_pages == ()
+    assert state.stale_pages == (child_page,)
+    assert client.calls == [("get_page", "111111"), ("get_page", "222222")]
+
+
 def test_compute_content_hash_is_deterministic_and_setting_sensitive():
     first = compute_content_hash(
         title="Home",
