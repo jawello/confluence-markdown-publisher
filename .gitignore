@@ -13,3 +13,7 @@ build/
 .worktrees/
 
 .codex
+
+# Graphify generated outputs and temporary extraction files
+graphify-out/
+.graphify_*
