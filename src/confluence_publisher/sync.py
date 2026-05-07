@@ -347,6 +347,16 @@ def build_sync_execution_plan(
     root = _root_item(plan)
     all_source_paths = _all_source_paths(plan)
 
+    if remote_state.missing_pages and not plan.create_missing_pages:
+        details = ", ".join(item.source_path for item in remote_state.missing_pages)
+        raise RuntimeError(
+            "Cannot create missing Confluence pages without --create-missing-pages: "
+            f"{details}"
+        )
+
+    if plan.space is None and _requires_space_for_creation(plan):
+        raise RuntimeError("Cannot sync project without a Confluence space")
+
     if dry_run:
         return SyncExecutionPlan(
             mode=SyncExecutionMode.PREVIEW,
@@ -356,6 +366,69 @@ def build_sync_execution_plan(
             publish_source_paths=all_source_paths,
             initial_page_ids={},
             requires_title_preflight=False,
+        )
+
+    if remote_state.root_readable is False:
+        if not plan.recreate_missing_root:
+            raise RuntimeError(
+                f"Cannot sync project because root page {root.page_id} for "
+                f"{root.source_path} is not readable. Enable --recreate-missing-root "
+                "or set sync.recreate_missing_root: true."
+            )
+        if plan.root_parent_page_id is None:
+            raise RuntimeError("Cannot recreate missing root without root.parent_page_id in manifest")
+        return SyncExecutionPlan(
+            mode=SyncExecutionMode.RECREATE_ROOT_TREE,
+            root_item=root,
+            prepared_source_paths=all_source_paths,
+            create_source_paths=all_source_paths,
+            publish_source_paths=all_source_paths,
+            initial_page_ids={},
+            requires_title_preflight=True,
+        )
+
+    if remote_state.stale_pages:
+        if not plan.recreate_stale_pages:
+            details = ", ".join(
+                f"{item.source_path} ({item.page_id})" for item in remote_state.stale_pages
+            )
+            raise RuntimeError(
+                "Cannot sync project because existing page IDs are not readable: "
+                f"{details}. Enable --recreate-stale-pages or set sync.recreate_stale_pages: true."
+            )
+        create_items = _with_descendants(
+            plan,
+            list(remote_state.stale_pages + remote_state.missing_pages),
+        )
+        page_ids = _initial_page_ids(plan)
+        for item in create_items:
+            page_ids.pop(item.source_path, None)
+        return SyncExecutionPlan(
+            mode=SyncExecutionMode.RECREATE_STALE_PAGES,
+            root_item=root,
+            prepared_source_paths=all_source_paths,
+            create_source_paths=tuple(item.source_path for item in create_items),
+            publish_source_paths=all_source_paths,
+            initial_page_ids=page_ids,
+            requires_title_preflight=True,
+        )
+
+    if remote_state.missing_pages:
+        root_page_id = _initial_page_ids(plan).get(root.source_path)
+        if root_page_id is None and root not in remote_state.missing_pages:
+            raise RuntimeError("Cannot create missing pages without a readable root page")
+        create_items = _with_descendants(plan, list(remote_state.missing_pages))
+        page_ids = _initial_page_ids(plan)
+        for item in create_items:
+            page_ids.pop(item.source_path, None)
+        return SyncExecutionPlan(
+            mode=SyncExecutionMode.CREATE_MISSING,
+            root_item=root,
+            prepared_source_paths=all_source_paths,
+            create_source_paths=tuple(item.source_path for item in create_items),
+            publish_source_paths=all_source_paths,
+            initial_page_ids=page_ids,
+            requires_title_preflight=True,
         )
 
     return SyncExecutionPlan(

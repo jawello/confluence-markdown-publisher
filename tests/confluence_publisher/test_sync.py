@@ -128,6 +128,151 @@ def test_build_sync_execution_plan_returns_publish_existing_for_readable_pages(t
     assert execution.requires_title_preflight is False
 
 
+def test_build_sync_execution_plan_rejects_missing_pages_without_create_policy(tmp_path):
+    child_dir = tmp_path / "guide"
+    child_dir.mkdir()
+    root = tmp_path / "index.md"
+    child = child_dir / "index.md"
+    root.write_text("# Home\n\nPlain text.\n", encoding="utf-8")
+    child.write_text("# Guide\n\nPlain text.\n", encoding="utf-8")
+    missing_child = PlannedPage("guide/index.md", child, None, "Guide", None, "index.md")
+    plan = sync_plan(
+        tmp_path,
+        items=(
+            PlannedPage("index.md", root, "111111", "Home", None, None),
+            missing_child,
+        ),
+    )
+    state = SyncRemoteState(
+        root_readable=True,
+        readable_by_page_id={"111111": True},
+        missing_pages=(missing_child,),
+        stale_pages=(),
+    )
+
+    with pytest.raises(RuntimeError, match="--create-missing-pages.*guide/index.md"):
+        build_sync_execution_plan(plan, remote_state=state, dry_run=False)
+
+
+def test_build_sync_execution_plan_creates_missing_child_under_root(tmp_path):
+    child_dir = tmp_path / "guide"
+    child_dir.mkdir()
+    root = tmp_path / "index.md"
+    child = child_dir / "index.md"
+    root.write_text("# Home\n\nPlain text.\n", encoding="utf-8")
+    child.write_text("# Guide\n\nPlain text.\n", encoding="utf-8")
+    missing_child = PlannedPage("guide/index.md", child, None, "Guide", None, "index.md")
+    plan = sync_plan(
+        tmp_path,
+        items=(
+            PlannedPage("index.md", root, "111111", "Home", None, None),
+            missing_child,
+        ),
+    )
+    plan = PublishPlan(**{**plan.__dict__, "create_missing_pages": True})
+    state = SyncRemoteState(
+        root_readable=True,
+        readable_by_page_id={"111111": True},
+        missing_pages=(missing_child,),
+        stale_pages=(),
+    )
+
+    execution = build_sync_execution_plan(plan, remote_state=state, dry_run=False)
+
+    assert execution.mode is SyncExecutionMode.CREATE_MISSING
+    assert execution.create_source_paths == ("guide/index.md",)
+    assert execution.initial_page_ids == {"index.md": "111111"}
+    assert execution.requires_title_preflight is True
+
+
+def test_build_sync_execution_plan_recreates_missing_root_when_policy_enabled(tmp_path):
+    plan = sync_plan(tmp_path)
+    plan = PublishPlan(**{**plan.__dict__, "recreate_missing_root": True})
+    state = SyncRemoteState(
+        root_readable=False,
+        readable_by_page_id={},
+        missing_pages=(),
+        stale_pages=(),
+    )
+
+    execution = build_sync_execution_plan(plan, remote_state=state, dry_run=False)
+
+    assert execution.mode is SyncExecutionMode.RECREATE_ROOT_TREE
+    assert execution.create_source_paths == ("index.md",)
+    assert execution.initial_page_ids == {}
+    assert execution.requires_title_preflight is True
+
+
+def test_build_sync_execution_plan_rejects_missing_root_without_policy(tmp_path):
+    plan = sync_plan(tmp_path)
+    state = SyncRemoteState(
+        root_readable=False,
+        readable_by_page_id={},
+        missing_pages=(),
+        stale_pages=(),
+    )
+
+    with pytest.raises(RuntimeError, match="root page.*111111.*--recreate-missing-root"):
+        build_sync_execution_plan(plan, remote_state=state, dry_run=False)
+
+
+def test_build_sync_execution_plan_requires_parent_for_missing_root_recreation(tmp_path):
+    plan = sync_plan(tmp_path, root_parent_page_id=None)
+    plan = PublishPlan(**{**plan.__dict__, "recreate_missing_root": True})
+    state = SyncRemoteState(
+        root_readable=False,
+        readable_by_page_id={},
+        missing_pages=(),
+        stale_pages=(),
+    )
+
+    with pytest.raises(RuntimeError, match="root.parent_page_id"):
+        build_sync_execution_plan(plan, remote_state=state, dry_run=False)
+
+
+def test_build_sync_execution_plan_recreates_stale_ancestor_with_descendants(tmp_path):
+    guide_dir = tmp_path / "guide"
+    guide_dir.mkdir()
+    root = tmp_path / "index.md"
+    guide = guide_dir / "index.md"
+    details = guide_dir / "details.md"
+    root.write_text("# Home\n\nPlain text.\n", encoding="utf-8")
+    guide.write_text("# Guide\n\nPlain text.\n", encoding="utf-8")
+    details.write_text("# Details\n\nPlain text.\n", encoding="utf-8")
+    stale_guide = PlannedPage("guide/index.md", guide, "222222", "Guide", None, "index.md")
+    plan = PublishPlan(
+        project_root=tmp_path,
+        manifest_path=tmp_path / ".confluence-publish.yml",
+        version_comment="Sync docs",
+        output_format="svg",
+        diagram_width=1000,
+        allow_diagram_fallback=False,
+        excluded_count=0,
+        items=(
+            PlannedPage("index.md", root, "111111", "Home", None, None),
+            stale_guide,
+            PlannedPage("guide/details.md", details, "333333", "Details", None, "guide/index.md"),
+        ),
+        space="~6393203da593cb822e995262",
+        root_page_id="111111",
+        sync_enabled=True,
+        recreate_stale_pages=True,
+    )
+    state = SyncRemoteState(
+        root_readable=True,
+        readable_by_page_id={"111111": True, "222222": False, "333333": True},
+        missing_pages=(),
+        stale_pages=(stale_guide,),
+    )
+
+    execution = build_sync_execution_plan(plan, remote_state=state, dry_run=False)
+
+    assert execution.mode is SyncExecutionMode.RECREATE_STALE_PAGES
+    assert execution.create_source_paths == ("guide/index.md", "guide/details.md")
+    assert execution.initial_page_ids == {"index.md": "111111"}
+    assert execution.requires_title_preflight is True
+
+
 def test_compute_content_hash_is_deterministic_and_setting_sensitive():
     first = compute_content_hash(
         title="Home",
