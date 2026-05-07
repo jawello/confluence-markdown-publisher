@@ -11,6 +11,9 @@ from confluence_publisher.bidirectional import compute_canonical_markdown_hash
 from confluence_publisher.sync import (
     CONTENT_HASH_VERSION,
     PreparedSyncPage,
+    SyncExecutionMode,
+    SyncRemoteState,
+    build_sync_execution_plan,
     compute_content_hash,
     prepare_sync_pages,
 )
@@ -83,6 +86,46 @@ def sync_plan(tmp_path, *, root_page_id="111111", root_parent_page_id="216373844
         root_parent_page_id=root_parent_page_id,
         sync_enabled=True,
     )
+
+
+def test_build_sync_execution_plan_returns_preview_for_dry_run(tmp_path):
+    plan = sync_plan(tmp_path)
+    state = SyncRemoteState(
+        root_readable=None,
+        readable_by_page_id={},
+        missing_pages=(),
+        stale_pages=(),
+    )
+
+    execution = build_sync_execution_plan(plan, remote_state=state, dry_run=True)
+
+    assert execution.mode is SyncExecutionMode.PREVIEW
+    assert execution.root_item.source_path == "index.md"
+    assert execution.prepared_source_paths == ("index.md",)
+    assert execution.create_source_paths == ()
+    assert execution.publish_source_paths == ("index.md",)
+    assert execution.initial_page_ids == {}
+    assert execution.requires_title_preflight is False
+
+
+def test_build_sync_execution_plan_returns_publish_existing_for_readable_pages(tmp_path):
+    plan = sync_plan(tmp_path)
+    state = SyncRemoteState(
+        root_readable=True,
+        readable_by_page_id={"111111": True},
+        missing_pages=(),
+        stale_pages=(),
+    )
+
+    execution = build_sync_execution_plan(plan, remote_state=state, dry_run=False)
+
+    assert execution.mode is SyncExecutionMode.PUBLISH_EXISTING
+    assert execution.root_item.source_path == "index.md"
+    assert execution.prepared_source_paths == ("index.md",)
+    assert execution.create_source_paths == ()
+    assert execution.publish_source_paths == ("index.md",)
+    assert execution.initial_page_ids == {"index.md": "111111"}
+    assert execution.requires_title_preflight is False
 
 
 def test_compute_content_hash_is_deterministic_and_setting_sensitive():

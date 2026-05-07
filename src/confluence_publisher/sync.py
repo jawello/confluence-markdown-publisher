@@ -7,6 +7,7 @@ import shutil
 import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from hashlib import sha256
 from pathlib import Path
 from urllib.parse import quote
@@ -30,6 +31,40 @@ class PreparedSyncPage:
     storage: str
     rendered_diagrams: list[RenderedDiagram]
     content_hash: str
+
+
+class SyncExecutionMode(StrEnum):
+    PREVIEW = "preview"
+    PUBLISH_EXISTING = "publish_existing"
+    CREATE_MISSING = "create_missing"
+    RECREATE_ROOT_TREE = "recreate_root_tree"
+    RECREATE_STALE_PAGES = "recreate_stale_pages"
+
+
+@dataclass(frozen=True)
+class SyncRemoteState:
+    root_readable: bool | None
+    readable_by_page_id: dict[str, bool]
+    missing_pages: tuple[PlannedPage, ...]
+    stale_pages: tuple[PlannedPage, ...]
+
+
+@dataclass(frozen=True)
+class SyncExecutionPlan:
+    mode: SyncExecutionMode
+    root_item: PlannedPage
+    prepared_source_paths: tuple[str, ...]
+    create_source_paths: tuple[str, ...]
+    publish_source_paths: tuple[str, ...]
+    initial_page_ids: dict[str, str]
+    requires_title_preflight: bool
+
+
+@dataclass(frozen=True)
+class SyncCreatedPage:
+    source_path: str
+    page: PageInfo
+    is_root: bool = False
 
 
 def compute_content_hash(
@@ -292,6 +327,45 @@ def _requires_space_for_creation(plan: PublishPlan) -> bool:
         (plan.create_missing_pages and any(item.page_id is None for item in plan.items))
         or plan.recreate_missing_root
         or plan.recreate_stale_pages
+    )
+
+
+def _all_source_paths(plan: PublishPlan) -> tuple[str, ...]:
+    return tuple(item.source_path for item in plan.items)
+
+
+def _initial_page_ids(plan: PublishPlan) -> dict[str, str]:
+    return {item.source_path: item.page_id for item in plan.items if item.page_id}
+
+
+def build_sync_execution_plan(
+    plan: PublishPlan,
+    *,
+    remote_state: SyncRemoteState,
+    dry_run: bool,
+) -> SyncExecutionPlan:
+    root = _root_item(plan)
+    all_source_paths = _all_source_paths(plan)
+
+    if dry_run:
+        return SyncExecutionPlan(
+            mode=SyncExecutionMode.PREVIEW,
+            root_item=root,
+            prepared_source_paths=all_source_paths,
+            create_source_paths=(),
+            publish_source_paths=all_source_paths,
+            initial_page_ids={},
+            requires_title_preflight=False,
+        )
+
+    return SyncExecutionPlan(
+        mode=SyncExecutionMode.PUBLISH_EXISTING,
+        root_item=root,
+        prepared_source_paths=all_source_paths,
+        create_source_paths=(),
+        publish_source_paths=all_source_paths,
+        initial_page_ids=_initial_page_ids(plan),
+        requires_title_preflight=False,
     )
 
 
