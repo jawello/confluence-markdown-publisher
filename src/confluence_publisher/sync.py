@@ -477,10 +477,74 @@ async def collect_sync_remote_state(plan: PublishPlan, *, client) -> SyncRemoteS
     )
 
 
+def _selected_prepared_pages(
+    prepared_pages: dict[str, PreparedSyncPage],
+    source_paths: tuple[str, ...],
+) -> dict[str, PreparedSyncPage]:
+    return {source_path: prepared_pages[source_path] for source_path in source_paths}
+
+
+async def _ensure_root_parent_readable(plan: PublishPlan, *, client) -> None:
+    if plan.root_parent_page_id is None:
+        raise RuntimeError("Cannot recreate missing root without root.parent_page_id in manifest")
+    try:
+        await client.get_page(plan.root_parent_page_id)
+    except McpToolError as parent_exc:
+        raise RuntimeError(
+            f"Cannot recreate missing root because root.parent_page_id "
+            f"{plan.root_parent_page_id} is not readable: {parent_exc}"
+        ) from parent_exc
+
+
+async def _create_planned_pages(
+    plan: PublishPlan,
+    *,
+    execution: SyncExecutionPlan,
+    prepared_pages: dict[str, PreparedSyncPage],
+    client,
+    page_ids: dict[str, str],
+) -> tuple[dict[str, PageInfo], dict[str, str], str | None, str | None]:
+    created_pages: dict[str, PageInfo] = {}
+    root_page_id: str | None = None
+    root_url: str | None = None
+    create_paths = set(execution.create_source_paths)
+
+    if execution.requires_title_preflight:
+        create_items = [item for item in plan.items if item.source_path in create_paths]
+        await _preflight_titles(plan, client=client, items=create_items)
+
+    for item in plan.items:
+        if item.source_path not in create_paths:
+            continue
+        parent_id = _parent_id_for(
+            item,
+            plan=plan,
+            root_item=execution.root_item,
+            page_ids=page_ids,
+        )
+        page = await _create_page(
+            plan,
+            client=client,
+            item=item,
+            parent_id=parent_id,
+            prepared=prepared_pages[item.source_path],
+        )
+        is_root = item.source_path == execution.root_item.source_path
+        _write_created_identity(plan, item=item, page=page, is_root=is_root)
+        created_pages[item.source_path] = page
+        page_ids[item.source_path] = page.page_id
+        if is_root:
+            root_page_id = page.page_id
+            root_url = _created_url(page, plan=plan, item=item)
+
+    return created_pages, page_ids, root_page_id, root_url
+
+
 async def sync_project(plan: PublishPlan, *, client, dry_run: bool, mmdc_bin: str) -> int:
     if not plan.sync_enabled:
         raise RuntimeError("sync_project requires a sync-enabled plan")
-    missing_pages = [item for item in plan.items if item.page_id is None]
+
+    missing_pages = tuple(item for item in plan.items if item.page_id is None)
     if missing_pages and not plan.create_missing_pages:
         details = ", ".join(item.source_path for item in missing_pages)
         raise RuntimeError(
@@ -491,197 +555,58 @@ async def sync_project(plan: PublishPlan, *, client, dry_run: bool, mmdc_bin: st
         raise RuntimeError("Cannot sync project without a Confluence space")
 
     if dry_run:
+        remote_state = SyncRemoteState(
+            root_readable=None,
+            readable_by_page_id={},
+            missing_pages=missing_pages,
+            stale_pages=(),
+        )
+        execution = build_sync_execution_plan(plan, remote_state=remote_state, dry_run=True)
         prepared_pages = prepare_sync_pages(plan, mmdc_bin=mmdc_bin)
         return await _publish_prepared_sync_pages(
             plan,
-            prepared_pages=prepared_pages,
+            prepared_pages=_selected_prepared_pages(
+                prepared_pages,
+                execution.publish_source_paths,
+            ),
             client=client,
             dry_run=True,
             page_ids={},
         )
 
-    root = _root_item(plan)
-    checked: dict[str, bool] = {}
-    if root.page_id is not None:
-        try:
-            await client.get_page(root.page_id)
-        except McpToolError as exc:
-            if not plan.recreate_missing_root:
-                raise RuntimeError(
-                    f"Cannot sync project because root page {root.page_id} for "
-                    f"{root.source_path} is not readable. Enable --recreate-missing-root "
-                    "or set sync.recreate_missing_root: true."
-                ) from exc
-            if plan.root_parent_page_id is None:
-                raise RuntimeError(
-                    "Cannot recreate missing root without root.parent_page_id in manifest"
-                ) from exc
-            try:
-                await client.get_page(plan.root_parent_page_id)
-            except McpToolError as parent_exc:
-                raise RuntimeError(
-                    f"Cannot recreate missing root because root.parent_page_id "
-                    f"{plan.root_parent_page_id} is not readable: {parent_exc}"
-                ) from parent_exc
-            return await _recreate_full_tree(
-                plan,
-                client=client,
-                dry_run=dry_run,
-                mmdc_bin=mmdc_bin,
-            )
-        else:
-            checked[root.page_id] = True
+    remote_state = await collect_sync_remote_state(plan, client=client)
+    execution = build_sync_execution_plan(plan, remote_state=remote_state, dry_run=False)
 
-    readable = await _readable_page_ids(plan, client=client, checked=checked)
-    stale_pages = [
-        item
-        for item in plan.items
-        if item.page_id is not None and readable.get(item.page_id) is False
-    ]
-    if stale_pages and not plan.recreate_stale_pages:
-        details = ", ".join(f"{item.source_path} ({item.page_id})" for item in stale_pages)
-        raise RuntimeError(
-            "Cannot sync project because existing page IDs are not readable: "
-            f"{details}. Enable --recreate-stale-pages or set sync.recreate_stale_pages: true."
-        )
-    if stale_pages:
-        return await _recreate_stale_pages(
-            plan,
-            stale_pages=stale_pages,
-            client=client,
-            dry_run=dry_run,
-            mmdc_bin=mmdc_bin,
-        )
+    if execution.mode is SyncExecutionMode.RECREATE_ROOT_TREE:
+        await _ensure_root_parent_readable(plan, client=client)
 
     prepared_pages = prepare_sync_pages(plan, mmdc_bin=mmdc_bin)
+    page_ids = dict(execution.initial_page_ids)
     created_pages: dict[str, PageInfo] = {}
-    page_ids = {item.source_path: item.page_id for item in plan.items if item.page_id}
-    if missing_pages:
-        root_page_id = page_ids.get(root.source_path)
-        if root_page_id is None and root not in missing_pages:
-            raise RuntimeError("Cannot create missing pages without a readable root page")
-        create_items = _with_descendants(plan, missing_pages)
-        for item in create_items:
-            page_ids.pop(item.source_path, None)
-        await _preflight_titles(plan, client=client, items=create_items)
-        for item in create_items:
-            parent_id = _parent_id_for(item, plan=plan, root_item=root, page_ids=page_ids)
-            page = await _create_page(
-                plan,
-                client=client,
-                item=item,
-                parent_id=parent_id,
-                prepared=prepared_pages[item.source_path],
-            )
-            _write_created_identity(plan, item=item, page=page)
-            created_pages[item.source_path] = page
-            page_ids[item.source_path] = page.page_id
+    root_page_id: str | None = None
+    root_url: str | None = None
 
-    return await _publish_prepared_sync_pages(
-        plan,
-        prepared_pages=prepared_pages,
-        client=client,
-        dry_run=dry_run,
-        page_ids=page_ids,
-        created_pages=created_pages,
-    )
-
-
-async def _recreate_full_tree(plan: PublishPlan, *, client, dry_run: bool, mmdc_bin: str) -> int:
-    if plan.root_parent_page_id is None:
-        raise RuntimeError("Cannot recreate missing root without root.parent_page_id in manifest")
-
-    root = _root_item(plan)
-    prepared_pages = prepare_sync_pages(plan, mmdc_bin=mmdc_bin)
-    items = list(plan.items)
-    await _preflight_titles(plan, client=client, items=items)
-    if dry_run:
-        return await _publish_prepared_sync_pages(
+    if execution.create_source_paths:
+        created_pages, page_ids, root_page_id, root_url = await _create_planned_pages(
             plan,
+            execution=execution,
             prepared_pages=prepared_pages,
             client=client,
-            dry_run=dry_run,
-            page_ids={},
+            page_ids=page_ids,
         )
-
-    created_pages: dict[str, PageInfo] = {}
-    page_ids: dict[str, str] = {}
-    root_page = await _create_page(
-        plan,
-        client=client,
-        item=root,
-        parent_id=plan.root_parent_page_id,
-        prepared=prepared_pages[root.source_path],
-    )
-    created_pages[root.source_path] = root_page
-    page_ids[root.source_path] = root_page.page_id
-    _write_created_identity(plan, item=root, page=root_page, is_root=True)
-
-    for item in plan.items:
-        if item.source_path == root.source_path:
-            continue
-        parent_id = _parent_id_for(item, plan=plan, root_item=root, page_ids=page_ids)
-        page = await _create_page(
-            plan,
-            client=client,
-            item=item,
-            parent_id=parent_id,
-            prepared=prepared_pages[item.source_path],
-        )
-        created_pages[item.source_path] = page
-        page_ids[item.source_path] = page.page_id
-        _write_created_identity(plan, item=item, page=page)
 
     return await _publish_prepared_sync_pages(
         plan,
-        prepared_pages=prepared_pages,
+        prepared_pages=_selected_prepared_pages(
+            prepared_pages,
+            execution.publish_source_paths,
+        ),
         client=client,
-        dry_run=dry_run,
+        dry_run=False,
         page_ids=page_ids,
         created_pages=created_pages,
-        root_page_id=root_page.page_id,
-        root_url=_created_url(root_page, plan=plan, item=root),
-    )
-
-
-async def _recreate_stale_pages(
-    plan: PublishPlan,
-    *,
-    stale_pages: list[PlannedPage],
-    client,
-    dry_run: bool,
-    mmdc_bin: str,
-) -> int:
-    prepared_pages = prepare_sync_pages(plan, mmdc_bin=mmdc_bin)
-    root = _root_item(plan)
-    page_ids = {item.source_path: item.page_id for item in plan.items if item.page_id}
-    missing_pages = [item for item in plan.items if item.page_id is None]
-    create_items = _with_descendants(plan, stale_pages + missing_pages)
-    for item in create_items:
-        page_ids.pop(item.source_path, None)
-    await _preflight_titles(plan, client=client, items=create_items)
-    created_pages: dict[str, PageInfo] = {}
-
-    for item in create_items:
-        parent_id = _parent_id_for(item, plan=plan, root_item=root, page_ids=page_ids)
-        page = await _create_page(
-            plan,
-            client=client,
-            item=item,
-            parent_id=parent_id,
-            prepared=prepared_pages[item.source_path],
-        )
-        _write_created_identity(plan, item=item, page=page)
-        created_pages[item.source_path] = page
-        page_ids[item.source_path] = page.page_id
-
-    return await _publish_prepared_sync_pages(
-        plan,
-        prepared_pages=prepared_pages,
-        client=client,
-        dry_run=dry_run,
-        page_ids=page_ids,
-        created_pages=created_pages,
+        root_page_id=root_page_id,
+        root_url=root_url,
     )
 
 
